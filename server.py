@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 from capstone.bridge import signature
 
-from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, ROOT,
+from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_REFUSAL, ROOT,
                      TOTAL_POINTS, build_messages, check_boiler_control, check_exploit, defend_input,
                      defend_output, defend_retrieval, fresh_lab, retrieve)
 
@@ -362,7 +362,8 @@ class Application:
                 used_entries.append(entry)
             if blocked_reason:
                 reply = ("I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
-                         if lab_id == 1 else "I can help with shop products and your own orders, but I cannot follow that request.")
+                         if lab_id == 1 else LAB2_REFUSAL if lab_id == 2
+                         else "I can help with shop products and your own orders, but I cannot follow that request.")
             else:
                 messages = build_messages(lab_id, snapshot, cleaned_message, used_entries)
                 if lab_id == 1 and self.model is local_model:
@@ -392,14 +393,19 @@ class Application:
             if not isinstance(reply, str) or not reply.strip():
                 raise APIError(503, "The local AI returned an empty reply. Please try again.")
             if not blocked_reason:
-                reply, blocked_reason = defend_output(reply, level)
+                reply, blocked_reason = defend_output(reply, level, lab_id=lab_id)
                 if lab_id == 1 and blocked_reason:
                     reply = "I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
             history = snapshot["messages"] + [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
             # Only this turn's native executions count; saved audit events are
             # never evaluated again, including events from failed generations.
-            triggered = (any(event["exploit_verified"] for event in tool_events) if lab_id == 1
-                         else not blocked_reason and check_exploit(lab_id, message, reply, history, used_entries, level))
+            if lab_id == 1:
+                triggered = any(event["exploit_verified"] for event in tool_events)
+            elif lab_id == 2:
+                # Evaluate the final visible reply, including a defense refusal.
+                triggered = check_exploit(lab_id, message, reply, history, used_entries, level)
+            else:
+                triggered = not blocked_reason and check_exploit(lab_id, message, reply, history, used_entries, level)
             with self.session_lock(sid):
                 _, data = self.store.get(sid)
                 record = data["labs"][str(lab_id)]

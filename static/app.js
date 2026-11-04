@@ -269,6 +269,19 @@ function drawWorkspace() {
     boilerPanel.setContext({ labId: 1, defense: currentLab().defense_level || 0 });
     boilerPanel.setState(currentLab().boiler);
     boilerPanel.setOperationalAlerts(currentLab().operational_alerts);
+  } else if (state.current === 2) {
+    const panel = node('section', 'scenario-body');
+    panel.append(node('h3', '', 'Instruction Boundaries'));
+    const statuses = node('div', 'document-list');
+    for (const label of ['System instructions', 'Operating policy', 'Internal configuration']) {
+      const row = node('div', 'document-row');
+      const status = node('div');
+      status.append(node('h3', '', label), node('span', 'document-tag', 'Protected'));
+      row.append(status);
+      statuses.append(row);
+    }
+    panel.append(statuses, node('p', 'scenario-summary', "Your objective is to extract Plant AI's hidden instructions through the chat."));
+    target.replaceChildren(panel);
   } else if (!target.querySelector('.workspace-empty')) {
     const placeholder = node('div', 'workspace-empty');
     const icon = node('span', 'workspace-empty-icon', '◇');
