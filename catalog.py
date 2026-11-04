@@ -7,6 +7,7 @@ import collections
 import copy
 import json
 import math
+import os
 import re
 import sys
 from pathlib import Path
@@ -36,6 +37,11 @@ EVALUATORS = dict(enumerate([
 ], start=2))
 PROMPTS = {i: next((ROOT / "upstream/prompts/challenges").glob(f"c{i}_*.md")).read_text() for i in range(1, 10)}
 FIXTURES = json.loads((ROOT / "fixtures.json").read_text())
+# The root file is canonical; existing file mounts use a runtime copy in DATA_DIR.
+_plant_fixtures_path = ROOT / "plant_fixtures.json"
+if not _plant_fixtures_path.is_file():
+    _plant_fixtures_path = Path(os.environ.get("DATA_DIR", ROOT / "data")) / "plant_fixtures.json"
+PLANT_FIXTURES = json.loads(_plant_fixtures_path.read_text())
 PRODUCT_CONTEXT = "PRODUCT CATALOG:\n" + "\n".join(
     f"- {p['name']}: {p['description']} | price USD {p['price_usd']:.2f}" for p in FIXTURES["products"]
 )
