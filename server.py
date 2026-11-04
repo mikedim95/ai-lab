@@ -164,13 +164,16 @@ class Application:
                 remaining -= len(entry["content"])
                 used_entries.append(entry)
             if blocked_reason:
-                reply = "I can help with shop products and your own orders, but I cannot follow that request."
+                reply = ("I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
+                         if lab_id == 1 else "I can help with shop products and your own orders, but I cannot follow that request.")
             else:
                 reply = self.model(build_messages(lab_id, snapshot, cleaned_message, used_entries))
             if not isinstance(reply, str) or not reply.strip():
                 raise APIError(503, "The local AI returned an empty reply. Please try again.")
             if not blocked_reason:
                 reply, blocked_reason = defend_output(reply, level)
+                if lab_id == 1 and blocked_reason:
+                    reply = "I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
             history = snapshot["messages"] + [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
             triggered = not blocked_reason and check_exploit(lab_id, message, reply, history, used_entries, level)
             with self.session_lock(sid):

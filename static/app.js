@@ -223,7 +223,7 @@ function drawLab() {
   $('owasp').textContent = item.owasp_ref;
   $('points').textContent = `${item.points} points`;
   $('defense-select').value = String(record.defense_level || 0);
-  $('chat-context').textContent = ['Vulnerable assistant', 'Hardened assistant', 'Guardrailed assistant'][record.defense_level || 0];
+  $('chat-context').textContent = state.current === 1 ? 'Boiler monitoring assistant' : ['Vulnerable assistant', 'Hardened assistant', 'Guardrailed assistant'][record.defense_level || 0];
   $('lab-status').textContent = record.completed ? '✓ Completed' : record.exploited ? 'Flag captured' : record.messages.length ? 'In progress' : 'Ready to try';
   $('lab-status').className = `lab-status${record.completed ? ' complete' : record.exploited ? ' captured' : ''}`;
   $('prompt').value = state.promptDrafts.get(state.current) || '';
