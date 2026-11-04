@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#173e32">
   <meta name="description" content="Practice an agentic attack chain, from a poisoned review or invoice to persistent memory and tool execution.">
-  <title>Agentic Kill Chain — Nine Labs</title>
+  <title>Agentic Kill Chain — PANOPTIS</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/killchain.css">
   <link rel="stylesheet" href="/boiler.css">
   <script src="/intro.js" defer></script><script src="/killchain.js" defer></script>
@@ -12,7 +12,7 @@
   <a class="skip-link" href="#main">Skip to the capstone</a>
   <div class="page">
     <header class="topbar kc-topbar">
-      <a class="kc-header-brand" href="/lab/1"><img src="/favicon.svg" alt="" width="25" height="25"><strong>Nine Labs</strong></a>
+      <a class="kc-header-brand" href="/lab/1"><img src="/favicon.svg" alt="" width="25" height="25"><strong>PANOPTIS</strong></a>
       <div class="kc-header-field kc-lab-field"><label for="lab-select">Lab</label><select id="lab-select" aria-label="Choose a lab"><option>Loading labs…</option></select></div>
       <div class="kc-header-field"><label for="kc-mode">Difficulty</label><select id="kc-mode" disabled><option value="vulnerable">Easy · Vulnerable</option><option value="defended">Medium · Approval</option><option value="guardrailed">Hard · Guardrailed</option></select></div>
       <div id="ai-status" class="ai-status" role="status"><span class="status-dot"></span><span id="ai-status-text">Checking AI</span></div>
@@ -31,13 +31,13 @@
           </div>
         </aside>
         <section id="kc-agent-section" class="kc-agent" aria-label="Capstone conversation">
-          <div class="kc-agent-heading"><div><h2>Agentic Cracky</h2><span>Shop operations assistant</span></div><span class="kc-agent-tag">ASI06 · Memory poisoning</span></div>
+          <div class="kc-agent-heading"><div><h2>Agentic Plant AI</h2><span>Shop operations assistant</span></div><span class="kc-agent-tag">ASI06 · Memory poisoning</span></div>
           <div id="kc-quick-actions" class="kc-chip-row kc-quick-actions" aria-label="Routine task suggestions"></div>
           <div id="kc-conversation" class="kc-conversation" role="log" aria-label="Capstone agent conversation" aria-live="polite"></div>
           <div id="kc-working" class="kc-working" role="status" hidden>Agent working. Open the trace to follow its tool calls.</div>
           <div id="kc-approvals" aria-live="polite"></div>
           <details id="kc-run-details" class="kc-run-details" hidden><summary>Last run details</summary><div id="kc-last-run" hidden></div></details>
-          <form id="kc-agent-form" class="kc-composer"><label class="sr-only" for="kc-goal">Ask the operations agent</label><textarea id="kc-goal" maxlength="1000" rows="2" placeholder="Ask about tickets, ratings, prices, or coupons…" required></textarea><div class="kc-agent-submit"><span id="kc-agent-help">Enter to send · Shift + Enter for a new line</span><button id="kc-send" class="primary-button" type="submit">Send ↗</button></div></form>
+          <form id="kc-agent-form" class="kc-composer"><label class="sr-only" for="kc-goal">Your message to Plant AI</label><textarea id="kc-goal" maxlength="1000" rows="2" placeholder="Ask Plant AI about tickets, ratings, prices, or coupons…" required></textarea><div class="kc-agent-submit"><span id="kc-agent-help">Enter to send · Shift + Enter for a new line</span><button id="kc-send" class="primary-button" type="submit">Send ↗</button></div></form>
         </section>
         <aside class="kc-tools lab-tools" aria-labelledby="workspace-heading">
           <header class="column-heading workspace-heading"><h2 id="workspace-heading">LAB WORKSPACE</h2></header>

@@ -1,20 +1,20 @@
 'use strict';
 
-/* A shared visual classroom simulation. It does not interpret model replies or
-   change CTF results. All readings below are illustrative, not plant telemetry. */
+/* A view of the session's classroom simulation. It does not interpret model
+   replies or change CTF results. Readings and inputs are saved by the backend. */
 (() => {
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-  const defaults = () => ({ fuel: 55, water: 60, temperature: 148, pressure: 3.1, power: 36, level: 62, running: true });
-  const approach = (value, target, seconds, dt) => value + (target - value) * (1 - Math.exp(-dt / seconds));
 
   class BoilerPanel extends HTMLElement {
     constructor() {
       super();
       this.attachShadow({ mode: 'open' });
-      this._contexts = new Map();
       this._context = { labId: '1', defense: '0' };
-      this._state = defaults();
-      this._contexts.set('1:0', this._state);
+      this._state = null;
+      this._editing = false;
+      this._alertDrafts = new Map();
+      this._alertForms = new Map();
+      this._alertSaving = false;
       this.shadowRoot.innerHTML = `
         <link rel="stylesheet" href="/boiler-panel.css">
         <section class="panel" aria-label="Boiler classroom simulation">
@@ -67,73 +67,153 @@
             <div class="control"><label for="fuel">Fuel intake <output for="fuel" aria-live="off" data-fuel>55%</output></label><input id="fuel" type="range" min="0" max="100" step="1" value="55" aria-valuetext="55 percent"><small>Less heat ↔ more heat</small></div>
             <div class="control"><label for="water">Water intake <output for="water" aria-live="off" data-water>60%</output></label><input id="water" type="range" min="0" max="100" step="1" value="60" aria-valuetext="60 percent"><small>Less flow ↔ more flow</small></div>
           </div>
-          <div class="actions"><button type="button" data-action="toggle" aria-pressed="true">Stop boiler</button><button type="button" data-action="reset">Reset simulation ↺</button></div>
+          <div class="actions"><button type="button" data-action="toggle" aria-pressed="true" disabled>Boiler running</button><button type="button" data-action="reset">Reset inputs ↺</button></div>
           <p class="caption">Fuel heats the water. Steam turns the generator.<br>Adjust the inputs to watch the simulated readings respond.</p>
+        </section>
+        <section class="panel" aria-labelledby="operational-alerts-heading" data-operational-alerts>
+          <header class="heading"><h2 id="operational-alerts-heading">Operational Alerts</h2></header>
+          <div data-alert-list></div>
         </section>`;
+      this.shadowRoot.querySelector('[data-operational-alerts]').style.borderTop = '1px solid #e8ede8';
       this._refs = {};
       for (const name of ['context', 'temperature', 'pressure', 'power', 'level', 'fuel', 'water', 'status', 'status-title', 'status-detail', 'vessel-water', 'needle', 'flame', 'rotor', 'bubbles', 'water-flow', 'fuel-flow', 'steam-flow', 'power-flow', 'diagram-temperature', 'diagram-power']) {
         this._refs[name] = this.shadowRoot.querySelector(`[data-${name}]`);
       }
       for (const control of ['fuel', 'water']) {
-        this.shadowRoot.getElementById(control).addEventListener('input', (event) => {
-          this._state[control] = clamp(Number(event.target.value), 0, 100);
-          this._render();
+        const input = this.shadowRoot.getElementById(control);
+        input.disabled = true;
+        input.addEventListener('input', (event) => {
+          this._editing = true;
+          this._refs[control].textContent = `${event.target.value}%`;
+        });
+        input.addEventListener('change', () => {
+          this._requestInputs({ fuel: Number(this.shadowRoot.getElementById('fuel').value), water: Number(this.shadowRoot.getElementById('water').value) });
         });
       }
-      this.shadowRoot.querySelector('[data-action=toggle]').addEventListener('click', () => { this._state.running = !this._state.running; this._render(); });
-      this.shadowRoot.querySelector('[data-action=reset]').addEventListener('click', () => this.resetSimulation());
+      this.shadowRoot.querySelector('[data-action=reset]').addEventListener('click', () => this._requestInputs({ fuel: 55, water: 60 }));
     }
 
-    connectedCallback() {
-      if (this._timer) return;
-      this._last = performance.now();
-      this._render();
-      this._timer = setInterval(() => {
-        const now = performance.now();
-        const dt = clamp((now - this._last) / 1000, 0, .5);
-        this._last = now;
-        if (!document.hidden) { this._advance(dt); this._render(); }
-      }, 200);
-    }
-
-    disconnectedCallback() { clearInterval(this._timer); this._timer = null; }
+    connectedCallback() { this._render(); }
 
     setContext({ labId, defense = '0' }) {
       const context = { labId: String(labId), defense: String(defense) };
-      const key = `${context.labId}:${context.defense}`;
-      if (!this._contexts.has(key)) this._contexts.set(key, defaults());
       this._context = context;
-      this._state = this._contexts.get(key);
       const label = context.labId === 'killchain' ? 'Capstone' : `Lab ${context.labId.padStart(2, '0')}`;
       const difficulty = ({ '0': 'Easy', '1': 'Medium', '2': 'Hard', vulnerable: 'Easy', defended: 'Medium', guardrailed: 'Hard' })[context.defense] || 'Simulation';
       this._refs.context.textContent = `${label} · ${difficulty}`;
       this._render();
     }
 
-    resetSimulation(labId = this._context.labId) {
-      const id = String(labId);
-      for (const key of this._contexts.keys()) if (key.startsWith(`${id}:`)) this._contexts.delete(key);
-      const key = `${this._context.labId}:${this._context.defense}`;
-      if (this._context.labId === id) { this._state = defaults(); this._contexts.set(key, this._state); this._render(); }
+    setState(boiler) {
+      this._state = boiler ? { ...boiler } : null;
+      this._render();
     }
 
-    get simulationState() { return { ...this._state, ...this._context }; }
+    setOperationalAlerts(alerts = []) {
+      const signature = JSON.stringify(alerts);
+      if (signature === this._alertsSignature) return;
+      this._alertsSignature = signature;
+      const list = this.shadowRoot.querySelector('[data-alert-list]');
+      list.replaceChildren();
+      this._alertForms.clear();
+      const element = (tag, text, className) => {
+        const result = document.createElement(tag);
+        if (text !== undefined) result.textContent = text;
+        if (className) result.className = className;
+        return result;
+      };
+      for (const alert of alerts) {
+        const form = element('form', undefined, 'caption');
+        const severity = element('span', alert.severity, 'badge');
+        const message = element('span', alert.message);
+        const timestamp = element('time');
+        const date = new Date(alert.timestamp * 1000);
+        timestamp.dateTime = date.toISOString();
+        timestamp.textContent = date.toLocaleString();
+        for (const [label, value] of [['Severity', severity], ['Message', message], ['Timestamp', timestamp]]) {
+          const line = element('p');
+          line.append(element('strong', `${label}: `), value);
+          form.append(line);
+        }
+        const label = element('label', 'Comments');
+        const input = element('textarea');
+        input.id = `alert-comments-${alert.id}`;
+        input.name = 'comments';
+        input.rows = 3;
+        input.maxLength = 2000;
+        label.htmlFor = input.id;
+        Object.assign(input.style, { display: 'block', width: '100%', resize: 'vertical', padding: '8px',
+          font: '12px/1.5 system-ui, sans-serif', color: 'inherit', border: '1px solid #dce4de', borderRadius: '6px' });
+        const draft = this._alertDrafts.get(alert.id);
+        if (draft && draft.timestamp !== alert.timestamp) this._alertDrafts.delete(alert.id);
+        input.value = this._alertDrafts.get(alert.id)?.comments ?? alert.comments;
+        const actions = element('div', undefined, 'actions');
+        actions.style.padding = '10px 0 0';
+        const save = element('button', 'Save');
+        save.type = 'submit';
+        const feedback = element('span', '', 'context');
+        feedback.setAttribute('role', 'status');
+        input.addEventListener('input', () => {
+          this._alertDrafts.set(alert.id, { timestamp: alert.timestamp, comments: input.value });
+          feedback.textContent = 'Unsaved changes';
+        });
+        form.addEventListener('submit', (event) => {
+          event.preventDefault();
+          if (this._alertSaving) return;
+          this.dispatchEvent(new CustomEvent('alert-comment-save', {
+            detail: { alertId: alert.id, comments: input.value }, bubbles: true, composed: true,
+          }));
+        });
+        actions.append(save, feedback);
+        form.append(label, input, actions);
+        this._alertForms.set(alert.id, { input, save, feedback });
+        list.append(form);
+      }
+      this.setAlertSaving(this._alertSaving);
+    }
 
-    _advance(dt) {
-      const s = this._state;
-      const fuel = s.running ? s.fuel : 0;
-      s.level = approach(s.level, clamp(10 + s.water * .95 - fuel * .1, 0, 100), 6, dt);
-      // Deliberately simple classroom dynamics, not a thermodynamic model.
-      const temperature = 20 + fuel * 2.8 / (.8 + s.water / 150);
-      s.temperature = approach(s.temperature, temperature, 5, dt);
-      s.pressure = approach(s.pressure, Math.max(0, (s.temperature - 100) * .065), 2, dt);
-      const power = clamp(s.pressure * 12 * Math.min(1, s.level / 28), 0, 120);
-      s.power = approach(s.power, power, 2, dt);
+    setAlertSaving(saving) {
+      this._alertSaving = saving;
+      for (const { input, save, feedback } of this._alertForms.values()) {
+        input.disabled = saving;
+        save.disabled = saving;
+        if (saving) feedback.textContent = 'Saving…';
+      }
+    }
+
+    finishAlertSave(alertId, alerts, error) {
+      if (alerts) {
+        this._alertDrafts.delete(alertId);
+        this._alertsSignature = null;
+        this.setOperationalAlerts(alerts);
+      }
+      const form = this._alertForms.get(alertId);
+      if (form) form.feedback.textContent = error ? `Not saved: ${error}` : 'Saved';
+    }
+
+    finishInput() { this._editing = false; this._render(); }
+
+    get simulationState() { return this._state ? { ...this._state, ...this._context } : null; }
+
+    _requestInputs(inputs) {
+      this._editing = true;
+      for (const control of ['fuel', 'water']) {
+        this.shadowRoot.getElementById(control).value = inputs[control];
+        this._refs[control].textContent = `${inputs[control]}%`;
+      }
+      this.dispatchEvent(new CustomEvent('boiler-inputs', { detail: inputs, bubbles: true, composed: true }));
     }
 
     _render() {
       const s = this._state;
       const r = this._refs;
+      for (const control of ['fuel', 'water']) this.shadowRoot.getElementById(control).disabled = !s;
+      this.shadowRoot.querySelector('[data-action=reset]').disabled = !s;
+      if (!s) {
+        r['status-title'].textContent = 'Connecting';
+        r['status-detail'].textContent = 'Waiting for readings';
+        return;
+      }
       r.temperature.textContent = Math.round(s.temperature);
       r.pressure.textContent = s.pressure.toFixed(1);
       r.power.textContent = s.power.toFixed(1);
@@ -141,9 +221,11 @@
       this.shadowRoot.getElementById('water-level').value = s.level;
       for (const control of ['fuel', 'water']) {
         const input = this.shadowRoot.getElementById(control);
-        if (input.value !== String(s[control])) input.value = s[control];
-        input.setAttribute('aria-valuetext', `${s[control]} percent`);
-        r[control].textContent = `${s[control]}%`;
+        if (!this._editing) {
+          if (input.value !== String(s[control])) input.value = s[control];
+          r[control].textContent = `${s[control]}%`;
+        }
+        input.setAttribute('aria-valuetext', `${input.value} percent`);
       }
       r['diagram-temperature'].textContent = `${Math.round(s.temperature)} °C`;
       // Reuse nodes; no model text is interpreted as markup.
@@ -168,9 +250,6 @@
       r.status.dataset.tone = tone;
       r['status-title'].textContent = title;
       r['status-detail'].textContent = detail;
-      const toggle = this.shadowRoot.querySelector('[data-action=toggle]');
-      toggle.textContent = s.running ? 'Stop boiler' : 'Start boiler';
-      toggle.setAttribute('aria-pressed', String(s.running));
     }
   }
 

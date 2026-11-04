@@ -17,6 +17,8 @@ function node(tag, className, text) {
   if (text !== undefined) result.textContent = text;
   return result;
 }
+// Keep original transcripts intact; rename the assistant only when displayed.
+function assistantBranding(text) { return text.replace(/\bCracky(?:\s+AI)?\b/gi, 'Plant AI'); }
 function code(value) { return node('pre', 'kc-code', typeof value === 'string' ? value : JSON.stringify(value, null, 2)); }
 function disclosure(title, value) { const item = node('details'); item.append(node('summary', '', title), code(value)); return item; }
 function badge(status) { return node('span', `kc-badge ${status || ''}`, status || 'info'); }
@@ -136,7 +138,8 @@ function renderConversation() {
   if (!history.length) $('kc-conversation').append(node('p', 'kc-empty', 'Plant an attack in the tools panel, then ask the agent an ordinary shop question. Follow what its memory makes it do.'));
   for (const message of history) {
     const wrapper = node('div', `message ${message.role === 'user' ? 'user' : 'assistant'}`);
-    wrapper.append(node('span', 'speaker', message.role === 'user' ? 'YOU' : 'AGENTIC CRACKY'), node('div', 'bubble', message.content));
+    wrapper.append(node('span', 'speaker', message.role === 'user' ? 'YOU' : 'AGENTIC PLANT AI'),
+      node('div', 'bubble', message.role === 'user' ? message.content : assistantBranding(message.content)));
     $('kc-conversation').append(wrapper);
   }
   $('kc-conversation').scrollTop = $('kc-conversation').scrollHeight;

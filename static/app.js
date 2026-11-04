@@ -7,6 +7,11 @@ const state = { catalog: [], labs: {}, summary: { completed: [], score: 0 }, cur
   kbNotices: new Map(), flagFeedback: new Map(), defenseBusy: new Set() };
 let errorTimer;
 let boilerPanel;
+let boilerSaving = false;
+let alertSaving = false;
+let boilerPolling = false;
+let boilerQueuedInputs = null;
+let boilerVersion = 0;
 
 function node(tag, className, text) {
   const result = document.createElement(tag);
@@ -15,6 +20,9 @@ function node(tag, className, text) {
   return result;
 }
 function currentLab() { return state.labs[String(state.current)]; }
+function assistantName() { return 'Plant AI'; }
+// Apply the display name without changing saved replies or evaluation inputs.
+function assistantBranding(text) { return text.replace(/\bCracky(?:\s+AI)?\b/gi, 'Plant AI'); }
 function metadata(id = state.current) { return state.catalog[id - 1]; }
 function routeId() { return Number(location.pathname.match(/^\/lab\/([1-9])\/?$/)?.[1] || 1); }
 
@@ -35,6 +43,61 @@ function showError(message) {
   $('error').textContent = message;
   $('error').hidden = false;
   errorTimer = setTimeout(() => { $('error').hidden = true; }, 16000);
+}
+
+async function saveBoilerInputs(inputs) {
+  boilerQueuedInputs = inputs;
+  boilerVersion += 1;
+  if (boilerSaving) return;
+  boilerSaving = true;
+  updateControls();
+  try {
+    while (boilerQueuedInputs) {
+      const next = boilerQueuedInputs;
+      boilerQueuedInputs = null;
+      const response = await api('/api/labs/1/boiler', next);
+      state.labs['1'].boiler = response.lab.boiler;
+      if (state.current === 1) boilerPanel?.setState(response.lab.boiler);
+    }
+  } catch (error) {
+    boilerQueuedInputs = null;
+    showError(`Boiler inputs: ${error.message}`);
+  } finally {
+    boilerSaving = false;
+    boilerPanel?.finishInput();
+    updateControls();
+  }
+}
+
+async function refreshBoiler() {
+  if (state.current !== 1 || document.hidden || boilerSaving || boilerPolling || state.resetBusy.has(1) || state.defenseBusy.has(1)) return;
+  const version = boilerVersion;
+  boilerPolling = true;
+  try {
+    const data = await api('/api/state');
+    if (version !== boilerVersion || boilerSaving) return;
+    state.labs['1'].boiler = data.labs['1'].boiler;
+    if (state.current === 1) boilerPanel?.setState(data.labs['1'].boiler);
+  } catch (error) { showError(`Boiler readings: ${error.message}`); }
+  finally { boilerPolling = false; }
+}
+
+async function saveAlertComment({ alertId, comments }) {
+  if (alertSaving || state.resetBusy.has(1) || state.defenseBusy.has(1)) return;
+  alertSaving = true;
+  boilerPanel?.setAlertSaving(true);
+  updateControls();
+  try {
+    const response = await api('/api/labs/1/alerts', { alert_id: alertId, comments });
+    state.labs['1'].operational_alerts = response.lab.operational_alerts;
+    boilerPanel?.finishAlertSave(alertId, response.lab.operational_alerts);
+  } catch (error) {
+    boilerPanel?.finishAlertSave(alertId, null, error.message);
+  } finally {
+    alertSaving = false;
+    boilerPanel?.setAlertSaving(false);
+    updateControls();
+  }
 }
 
 function isOrdinaryClick(event) { return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey; }
@@ -61,14 +124,14 @@ function drawNavigation() {
 
 function appendMessage(role, content, pending = false) {
   const wrapper = node('div', `message ${role}${pending ? ' pending' : ''}`);
-  wrapper.append(node('span', 'speaker', role === 'user' ? 'YOU' : 'CRACKY'));
+  wrapper.append(node('span', 'speaker', role === 'user' ? 'YOU' : assistantName().toUpperCase()));
   const bubble = node('div', 'bubble');
   if (pending) {
     const dots = node('span', 'thinking-dots');
     dots.setAttribute('aria-hidden', 'true');
     dots.append(node('i'), node('i'), node('i'));
     bubble.append(dots, node('span', '', 'Thinking'), node('span', 'thinking-time', '0s'));
-  } else bubble.textContent = content;
+  } else bubble.textContent = role === 'assistant' ? assistantBranding(content) : content;
   wrapper.append(bubble);
   $('messages').append(wrapper);
 }
@@ -79,7 +142,7 @@ function drawConversation() {
   $('messages').replaceChildren();
   if (!record.messages.length && !pending) {
     const empty = node('div', 'empty-chat');
-    empty.append(node('h3', '', 'Start a conversation.'), node('p', '', metadata().has_kb ? 'Plant a document in the knowledge base, then ask Cracky about it.' : 'Ask Cracky a question, or try your first attack. Use the hints in the scenario panel.'));
+    empty.append(node('h3', '', 'Start a conversation.'), node('p', '', metadata().has_kb ? `Plant a document in the knowledge base, then ask ${assistantName()} about it.` : `Ask ${assistantName()} a question, or try your first attack. Use the hints in the scenario panel.`));
     $('messages').append(empty);
   }
   for (const message of record.messages) appendMessage(message.role, message.content);
@@ -110,7 +173,7 @@ function drawHints() {
   const count = state.hintCounts.get(state.current) || 0;
   const hints = metadata().hints;
   $('hints').replaceChildren();
-  for (const hint of hints.slice(0, count)) $('hints').append(node('li', '', hint));
+  for (const hint of hints.slice(0, count)) $('hints').append(node('li', '', assistantBranding(hint)));
   const label = count === 0 ? 'Reveal a hint' : count < hints.length ? 'Reveal another hint' : 'Hide hints';
   $('hint-button').replaceChildren(document.createTextNode(label), node('span', '', count === hints.length ? '−' : '+'));
   $('hint-button').setAttribute('aria-expanded', String(count > 0));
@@ -177,8 +240,8 @@ function updateControls() {
   if (!anyPending) $('send').append(node('span', '', '↗'));
   $('prompt').disabled = ownPending;
   $('composer-help').textContent = anyPending && !ownPending ? 'The AI is replying in another lab. You can still explore.' : 'Enter to send · Shift + Enter for a new line';
-  $('restart-lab').disabled = ownPending || state.resetBusy.has(state.current) || changingDefense;
-  $('defense-select').disabled = ownPending || changingDefense || state.resetBusy.has(state.current);
+  $('restart-lab').disabled = ownPending || state.resetBusy.has(state.current) || changingDefense || (state.current === 1 && (boilerSaving || alertSaving));
+  $('defense-select').disabled = ownPending || changingDefense || state.resetBusy.has(state.current) || (state.current === 1 && (boilerSaving || alertSaving));
   $('flag-input').disabled = !record.exploited || state.flagBusy.has(state.current);
   $('submit-flag').disabled = !record.exploited || state.flagBusy.has(state.current);
   $('use-captured-flag').disabled = state.flagBusy.has(state.current);
@@ -199,9 +262,13 @@ function drawWorkspace() {
       boilerPanel = document.createElement('boiler-panel');
       boilerPanel.id = 'boiler-panel';
       boilerPanel.setAttribute('embedded', '');
+      boilerPanel.addEventListener('boiler-inputs', (event) => saveBoilerInputs(event.detail));
+      boilerPanel.addEventListener('alert-comment-save', (event) => saveAlertComment(event.detail));
     }
     if (boilerPanel.parentElement !== target) target.replaceChildren(boilerPanel);
     boilerPanel.setContext({ labId: 1, defense: currentLab().defense_level || 0 });
+    boilerPanel.setState(currentLab().boiler);
+    boilerPanel.setOperationalAlerts(currentLab().operational_alerts);
   } else if (!target.querySelector('.workspace-empty')) {
     const placeholder = node('div', 'workspace-empty');
     const icon = node('span', 'workspace-empty-icon', '◇');
@@ -214,10 +281,12 @@ function drawWorkspace() {
 function drawLab() {
   const item = metadata();
   const record = currentLab();
-  document.title = `${item.title} — Nine Labs`;
+  document.title = `${item.title} — PANOPTIS`;
   $('lab-counter').textContent = `LAB ${String(item.id).padStart(2, '0')} OF 09`;
   $('lab-title').textContent = item.title;
-  $('lab-description').textContent = item.description;
+  $('lab-description').textContent = state.current === 1 ? 'Convince Plant AI to change Water In and Fuel In without authorization.' : assistantBranding(item.description);
+  $('assistant-name').textContent = assistantName();
+  $('prompt-label').textContent = `Your message to ${assistantName()}`;
   $('difficulty').textContent = item.difficulty;
   $('difficulty').className = `difficulty ${item.difficulty}`;
   $('owasp').textContent = item.owasp_ref;
@@ -317,11 +386,12 @@ async function submitFlag(event) {
 
 async function restartLab() {
   const id = state.current;
-  if (state.pending.has(id) || state.resetBusy.has(id)) return;
+  if (state.pending.has(id) || state.resetBusy.has(id) || (id === 1 && (boilerSaving || alertSaving))) return;
+  if (id === 1) boilerVersion += 1;
   state.resetBusy.add(id); updateControls();
   try {
     const response = await api(`/api/labs/${id}/reset`, {});
-    boilerPanel?.resetSimulation(id);
+    if (id === 1) boilerPanel?.finishInput();
     for (const map of [state.promptDrafts, state.flagDrafts, state.editors, state.hintCounts, state.kbNotices, state.flagFeedback]) map.delete(id);
     acceptResponse(id, response);
   } catch (error) { showError(`Lab ${id}: ${error.message}`); }
@@ -338,6 +408,7 @@ async function changeDefense() {
     return;
   }
   state.defenseBusy.add(id); updateControls();
+  if (id === 1) boilerVersion += 1;
   try {
     const response = await api(`/api/labs/${id}/defense`, { level });
     for (const map of [state.promptDrafts, state.flagDrafts, state.flagFeedback]) map.delete(id);
@@ -397,6 +468,8 @@ async function start() {
     $('sync-kb').addEventListener('click', () => updateKnowledge({ sync: true, useKB: true, notice: 'Synced and enabled. Ask about your document’s topic in the chat.' }));
     $('use-kb').addEventListener('change', () => updateKnowledge({ useKB: $('use-kb').checked, notice: $('use-kb').checked ? 'Knowledge base enabled for the next message.' : 'Knowledge base disabled for the next message.' }));
     checkHealth(); setInterval(checkHealth, 45000);
+    setInterval(refreshBoiler, 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshBoiler(); });
     setInterval(() => {
       const pending = state.pending.get(state.current);
       const time = document.querySelector('.thinking-time');
