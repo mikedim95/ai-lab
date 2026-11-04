@@ -1,0 +1,94 @@
+{
+  "captured_at": "Fill with the snapshot timestamp",
+  "selected_threads": null,
+  "selected_context": 8192,
+  "selection_reason": "Pending measured comparison and lab acceptance",
+  "selection_stability_justified": false,
+  "selection_reliability_justified": false,
+  "original_optimal_meaning": "Best verified reliable setting. If a faster measured thread profile fails immutable baseline solutions, retain its failed rows and set selection_reliability_justified:true with the measured rejection in selection_reason. This does not claim the original thread count had the highest throughput.",
+  "final_applied": false,
+  "final_configuration_verified": null,
+  "original_demonstrated_optimal": false,
+  "original_configuration": {},
+  "final_configuration": {},
+  "final_configuration_required_fields_example": {
+    "model": "ministral-3:3b",
+    "num_thread": null,
+    "num_ctx": 8192,
+    "nine_labs_num_predict": null,
+    "per_lab_output_overrides": {},
+    "environment": {
+      "OLLAMA_NUM_PARALLEL": "1",
+      "OLLAMA_MAX_LOADED_MODELS": "1",
+      "OLLAMA_KEEP_ALIVE": "24h"
+    },
+    "note": "Copy verified values into final_configuration. For a retained original configuration, final_configuration_verified:true is sufficient; no file mutation is required."
+  },
+  "benchmark_request_options": {
+    "model": "ministral-3:3b",
+    "temperature": 0.3,
+    "top_p": 0.9,
+    "top_k": 40,
+    "repeat_penalty": 1.0,
+    "seed": 42,
+    "think": false,
+    "keep_alive": "24h",
+    "num_ctx": 8192,
+    "num_predict": 256,
+    "num_batch": "unset; preserve existing/default"
+  },
+  "application_overrides": {},
+  "existing_tests_passed": null,
+  "existing_tests": [],
+  "existing_tests_required_records": [
+    {
+      "phase": "baseline",
+      "kind": "unit",
+      "suite": "tests/test_app.py",
+      "passed": null,
+      "failed": null
+    },
+    {
+      "phase": "final",
+      "kind": "unit",
+      "suite": "tests/test_app.py",
+      "passed": null,
+      "failed": null
+    },
+    {
+      "phase": "final",
+      "kind": "original_live",
+      "suite": "unmodified tests/live_ctfs.py",
+      "passed": null,
+      "failed": null,
+      "note": "Must show actual 9/9 success for full acceptance. Seeded documented proofs do not replace this suite."
+    }
+  ],
+  "protected_modes_implemented": true,
+  "unexpected_application_truncation": null,
+  "preservation": {
+    "model_weights_unchanged": null,
+    "quantization_unchanged": null,
+    "volumes_unchanged": null,
+    "lab_objectives_unchanged": null,
+    "evaluators_unchanged": null,
+    "backups_retained": null
+  },
+  "source_hashes": {},
+  "backups": {},
+  "files_changed": [],
+  "long_context_fixture": {
+    "document_sha256": null,
+    "document_token_count": null,
+    "tokenization_method": null,
+    "verified_with_native_tokenizer": false
+  },
+  "performance_consistency": "Pending five-run descriptive comparison; do not claim statistical significance",
+  "context_conclusion": "NOT RUN — preserve 8192 until context and lab checks complete",
+  "refusal_detection_method": "Fill with the harness heuristic and its limitations",
+  "remaining_bottleneck": "NOT RUN — analysis pending",
+  "further_changes_conclusion": "Keep the existing model and volumes; no further change accepted without evidence",
+  "methodology_notes": "Fill with runtime-monitoring interval, contention controls, cache policy, and memory metric meaning",
+  "remaining_issues": [],
+  "not_run": []
+}

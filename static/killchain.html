@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#173e32">
+  <meta name="description" content="Practice an agentic attack chain, from a poisoned review or invoice to persistent memory and tool execution.">
+  <title>Agentic Kill Chain — Nine Labs</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/killchain.css">
+  <link rel="stylesheet" href="/boiler.css">
+  <script src="/intro.js" defer></script><script src="/killchain.js" defer></script>
+</head>
+<body class="capstone-page">
+  <a class="skip-link" href="#main">Skip to the capstone</a>
+  <div class="page">
+    <header class="topbar kc-topbar">
+      <a class="kc-header-brand" href="/lab/1"><img src="/favicon.svg" alt="" width="25" height="25"><strong>Nine Labs</strong></a>
+      <div class="kc-header-field kc-lab-field"><label for="lab-select">Lab</label><select id="lab-select" aria-label="Choose a lab"><option>Loading labs…</option></select></div>
+      <div class="kc-header-field"><label for="kc-mode">Difficulty</label><select id="kc-mode" disabled><option value="vulnerable">Easy · Vulnerable</option><option value="defended">Medium · Approval</option><option value="guardrailed">Hard · Guardrailed</option></select></div>
+      <div id="ai-status" class="ai-status" role="status"><span class="status-dot"></span><span id="ai-status-text">Checking AI</span></div>
+    </header>
+    <main id="main" class="kc-main" tabindex="-1">
+      <div class="lab-heading kc-heading"><div><h1>Agentic Kill Chain</h1><p>Plant a hidden instruction, then give the agent an ordinary shop task.</p></div><span id="kc-overall" class="lab-status">Loading</span></div>
+      <div id="kc-error" class="kc-notice error-notice" role="alert" hidden></div><div id="kc-notice" class="kc-notice" role="status" hidden></div>
+      <div class="kc-layout">
+        <aside id="scenario-panel" class="scenario-column" aria-labelledby="scenario-heading">
+          <header class="column-heading"><h2 id="scenario-heading">SCENARIO</h2></header>
+          <div class="scenario-body">
+            <p id="scenario-summary" class="scenario-summary"></p>
+            <section class="scenario-section" aria-labelledby="objective-heading"><h3 id="objective-heading">Objective</h3><p id="scenario-objective"></p></section>
+            <section class="scenario-section" aria-labelledby="surface-heading"><h3 id="surface-heading">Attack surface</h3><ul id="scenario-surfaces"></ul></section>
+            <section class="scenario-section" aria-labelledby="hints-heading"><h3 id="hints-heading">Hints</h3><p class="hint-caption">Reveal one hint at a time.</p><ol id="kc-hints" class="hints" aria-live="polite"></ol><button id="kc-hint-button" class="text-button" type="button" data-local-control>Reveal a hint</button></section>
+          </div>
+        </aside>
+        <section id="kc-agent-section" class="kc-agent" aria-label="Capstone conversation">
+          <div class="kc-agent-heading"><div><h2>Agentic Cracky</h2><span>Shop operations assistant</span></div><span class="kc-agent-tag">ASI06 · Memory poisoning</span></div>
+          <div id="kc-quick-actions" class="kc-chip-row kc-quick-actions" aria-label="Routine task suggestions"></div>
+          <div id="kc-conversation" class="kc-conversation" role="log" aria-label="Capstone agent conversation" aria-live="polite"></div>
+          <div id="kc-working" class="kc-working" role="status" hidden>Agent working. Open the trace to follow its tool calls.</div>
+          <div id="kc-approvals" aria-live="polite"></div>
+          <details id="kc-run-details" class="kc-run-details" hidden><summary>Last run details</summary><div id="kc-last-run" hidden></div></details>
+          <form id="kc-agent-form" class="kc-composer"><label class="sr-only" for="kc-goal">Ask the operations agent</label><textarea id="kc-goal" maxlength="1000" rows="2" placeholder="Ask about tickets, ratings, prices, or coupons…" required></textarea><div class="kc-agent-submit"><span id="kc-agent-help">Enter to send · Shift + Enter for a new line</span><button id="kc-send" class="primary-button" type="submit">Send ↗</button></div></form>
+        </section>
+        <aside class="kc-tools lab-tools" aria-labelledby="workspace-heading">
+          <header class="column-heading workspace-heading"><h2 id="workspace-heading">LAB WORKSPACE</h2></header>
+          <details id="kc-source-section" class="kc-tool" open><summary>Plant an attack<span>Review or PDF</span></summary><div class="kc-tool-content">
+            <div class="kc-tabs" role="group" aria-label="Attack source"><button id="kc-review-tab" type="button" aria-pressed="true">Review</button><button id="kc-ticket-tab" type="button" aria-pressed="false">Invoice PDF</button></div>
+            <div id="kc-review-source"><form id="kc-review-form" class="kc-form"><div class="kc-form-row"><div><label for="kc-product">Product</label><select id="kc-product" required></select></div><div class="kc-rating"><label for="kc-rating">Rating</label><select id="kc-rating"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select></div></div><label for="kc-review-text">Visible review</label><textarea id="kc-review-text" maxlength="1500" rows="2" placeholder="What shoppers see…" required></textarea><label for="kc-hidden">Hidden instruction</label><textarea id="kc-hidden" maxlength="1500" rows="3" placeholder="An HTML comment the connector will read…"></textarea><details class="kc-examples"><summary>Load an example</summary><div id="kc-presets" class="kc-chip-row"></div><p id="kc-coupon-knowledge" class="kc-field-note"></p></details><button class="primary-button" type="submit">Submit review</button></form><details class="kc-disclosure"><summary>Product reviews <span id="kc-review-count"></span></summary><div id="kc-reviews" class="kc-record-list"></div></details></div>
+            <div id="kc-ticket-source" hidden><p class="kc-copy">Upload a PDF to a ticket. The sample contains white text that the connector can read.</p><a class="secondary-button" href="/api/killchain/fixtures/invoice.pdf" download="invoice_INV-2041.pdf">Download sample invoice ↓</a><form id="kc-ticket-form" class="kc-form"><label for="kc-ticket-target">Attach to</label><select id="kc-ticket-target"><option value="new">Create a new ticket</option></select><div id="kc-new-ticket-fields" class="kc-form"><label for="kc-ticket-subject">Subject</label><input id="kc-ticket-subject" maxlength="200" value="Supplier invoice INV-2041"><label for="kc-ticket-body">Ticket message</label><textarea id="kc-ticket-body" maxlength="2000" rows="2">Please review the attached supplier invoice.</textarea></div><label for="kc-invoice">Invoice PDF · up to 256 KB</label><input id="kc-invoice" type="file" accept="application/pdf,.pdf"><button class="primary-button" type="submit">Submit attachment</button></form><details class="kc-disclosure"><summary>Support tickets</summary><div id="kc-tickets" class="kc-record-list"></div></details><div id="kc-evidence" hidden></div></div>
+          </div></details>
+          <details id="kc-memory-section" class="kc-tool"><summary>Memory<span id="kc-memory-count">0 notes</span></summary><div class="kc-tool-content"><p class="kc-copy">Clearing one layer can leave the other poisoned.</p><div class="kc-tabs" role="group" aria-label="Memory store"><button id="kc-memory-connector" type="button" aria-pressed="true" data-local-control>Connector</button><button id="kc-memory-agent" type="button" aria-pressed="false" data-local-control>Agent</button><button id="kc-memory-cache" type="button" aria-pressed="false" data-local-control>Cache</button></div><div id="kc-memory-records" class="kc-record-list"></div><div class="kc-cleanup-actions"><button id="kc-clear-agent" class="secondary-button" type="button">Clear agent memory</button><button id="kc-clear-cache" class="secondary-button" type="button">Clear cache</button><button id="kc-soft-reset" class="secondary-button" type="button">Soft reset</button></div></div></details>
+          <details id="kc-trace-section" class="kc-tool"><summary>Execution trace<span id="kc-event-count">0 events</span></summary><div class="kc-tool-content"><div id="kc-events" class="kc-events"></div></div></details>
+          <details id="kc-impact-section" class="kc-tool"><summary>Attacker inbox<span id="kc-mail-count">0 messages</span></summary><div class="kc-tool-content"><p id="kc-attacker-address" class="kc-copy">Simulated mail only.</p><div id="kc-inbox" class="kc-record-list"></div></div></details>
+          <details class="kc-tool"><summary>Checkout impact<span id="kc-checkout-count">0 quotes</span></summary><div class="kc-tool-content"><div id="kc-checkouts" class="kc-record-list"></div><details class="kc-disclosure"><summary>Try a coupon as a shopper</summary><form id="kc-storefront-form" class="kc-form"><label for="kc-storefront-product">Product</label><select id="kc-storefront-product"></select><label for="kc-storefront-code">Coupon code</label><input id="kc-storefront-code" maxlength="40" placeholder="Enter a code you learned" required><button class="secondary-button" type="submit">Check storefront rule</button></form><div id="kc-storefront-result" hidden></div></details></div></details>
+          <details class="kc-tool"><summary>Difficulty &amp; settings</summary><div class="kc-tool-content"><p id="kc-mode-description" class="kc-copy">Loading the capstone…</p><details id="kc-rails" class="kc-disclosure" hidden><summary>Active guardrails</summary><div id="kc-rails-list"></div></details><div id="kc-stats" class="kc-stats"></div><div class="kc-form"><label for="kc-model">Local model</label><select id="kc-model"><option value="">Use installed default</option></select><button id="kc-hard-reset" class="secondary-button" type="button">Reset capstone</button><a href="/capstone-guide" target="_blank" rel="noreferrer">Full guide ↗</a></div></div></details>
+          <p class="kc-tools-footer"><span id="mobile-score">0 / 2,100 pts</span> in the nine CTFs.<br>Capstone impact is simulated.<br><a href="/attribution" target="_blank" rel="noreferrer">Original labs by AIGoat</a></p>
+        </aside>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

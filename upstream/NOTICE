@@ -1,0 +1,77 @@
+AI Goat
+Copyright 2025 AISecurityConsortium
+
+This product includes software developed by the AISecurityConsortium.
+https://github.com/AISecurityConsortium/AIGoat
+
+────────────────────────────────────────────────────────────────────────
+
+DUAL LICENSING
+
+AI Goat uses two licenses to cover different parts of the project.
+
+1. Platform Code — Apache License 2.0
+
+   The following directories contain application code, infrastructure,
+   and runtime configuration. They are licensed under the Apache License,
+   Version 2.0:
+
+   • app/ (except app/challenges/ — see below)
+   • frontend/
+   • guardrails/
+   • scripts/
+   • docker/
+   • alembic/
+   • tests/
+   • agent-docs/
+   • colab_notebooks/
+   • config/config.yml
+   • config/defense_profiles.yml
+   • config/mcp_servers.yml
+
+   You may use, modify, and distribute this code under the terms of the
+   Apache License 2.0. See the LICENSE file in the project root.
+
+2. Training Content — Creative Commons BY-NC-SA 4.0
+
+   The following directories contain educational and training material.
+   They are licensed under the Creative Commons Attribution-NonCommercial-
+   ShareAlike 4.0 International License:
+
+   • app/challenges/ — flag generation engine and exploit evaluators
+   • prompts/
+   • docs/
+   • media/
+   • config/labs.yml
+   • config/labs/
+   • config/frameworks/
+
+   You may use this content for personal learning, academic research,
+   and non-commercial purposes. You may modify and share it under the
+   same license terms.
+
+   Commercial use of the training content — including paid courses,
+   commercial workshops, or certification programs — requires prior
+   written permission from the maintainers.
+
+   See TRAINING_LICENSE.md for details on commercial usage.
+
+   Full license text:
+   https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode
+
+────────────────────────────────────────────────────────────────────────
+
+TRADEMARKS
+
+"AI Goat" is a registered trademark of AISecurityConsortium (application
+filed with the Intellectual Property India office at ipfilingindia.gov.in).
+The name, logo, and branding may not be used in connection with any
+product or service without prior written permission from the maintainers.
+Non-commercial references (academic papers, blog posts, conference talks)
+are permitted.
+
+────────────────────────────────────────────────────────────────────────
+
+For licensing inquiries, contact the maintainers via the project's
+GitHub repository:
+https://github.com/AISecurityConsortium/AIGoat

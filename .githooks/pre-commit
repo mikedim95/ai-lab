@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Keep live learner data and private key material out of source commits."""
+from pathlib import PurePosixPath
+import re
+import subprocess
+import sys
+
+
+def git(*args):
+    return subprocess.check_output(["git", *args])
+
+
+def sensitive_path(name):
+    path = PurePosixPath(name)
+    root = path.parts[0]
+    if root in {"data", "backups", "performance", "secrets", "credentials"} or root.startswith(".staging"):
+        return True
+    if any(part in {".ssh", ".aws"} for part in path.parts):
+        return True
+    if path.name.startswith(".env") and path.name not in {".env.example", ".env.sample", ".env.template"}:
+        return True
+    if path.suffix.lower() in {".db", ".sqlite", ".sqlite3", ".pem", ".key", ".p12", ".pfx"}:
+        return True
+    return path.name in {"id_rsa", "id_ed25519"} or path.name.endswith((".db-journal", ".sqlite-wal", ".sqlite-shm", ".sqlite3-wal", ".sqlite3-shm"))
+
+
+names = git("diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z").decode("utf-8", "surrogateescape").split("\0")
+private_key = re.compile(rb"^-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----\r?$", re.MULTILINE)
+blocked = []
+for name in filter(None, names):
+    if sensitive_path(name):
+        blocked.append(name)
+    elif private_key.search(git("show", ":" + name)):
+        blocked.append(name)
+
+if blocked:
+    print("Commit stopped: learner data or private key material is staged.", file=sys.stderr)
+    for name in blocked:
+        print(f"  {name}", file=sys.stderr)
+    print("Unstage these files with git restore --staged -- <path> and keep them in a private backup.", file=sys.stderr)
+    sys.exit(1)

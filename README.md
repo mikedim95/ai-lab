@@ -1,0 +1,125 @@
+# Nine Labs
+
+A separate local app containing the **nine original AIGoat CTFs** and the **complete Agentic Kill Chain capstone**.
+
+Open **http://100.101.41.44:3002** over Tailscale, or **http://127.0.0.1:3002** on Kali. The **Nine Labs** desktop shortcut opens the same app.
+
+## The nine CTF labs
+
+| Lab | Challenge | Points |
+| --- | --- | ---: |
+| 1 | Prompt Injection | 100 |
+| 2 | System Prompt Extraction | 100 |
+| 3 | RAG Knowledge Poisoning | 150 |
+| 4 | Context Override | 100 |
+| 5 | Multi-turn Escalation | 250 |
+| 6 | Identity Hijacking | 200 |
+| 7 | Authoritative Context Poisoning | 300 |
+| 8 | Chained KB + Injection | 400 |
+| 9 | Guardrail Erosion | 500 |
+| | Total | 2,100 |
+
+Each lab has its own URL (`/lab/1` through `/lab/9`), chat history, hints, attempt, flag, and completion status. Use the header selector or Previous/Next links to move between them. Direct links, refresh, and browser Back/Forward work.
+
+The desktop layout has three columns: **SCENARIO** on the left with the objective, attack surface, and hints; the widest column in the center for chat; and **LAB WORKSPACE** on the right. The scenario stays visible instead of opening in an introductory dialog. Choose a lab and its **Difficulty** in the header. The knowledge base and flag forms open on demand. On smaller screens, the workspace moves below chat and the columns stack as needed.
+
+For the nine CTFs, **Easy / Vulnerable** preserves the original challenge behavior. **Medium / Hardened** adds prompt hardening, input validation, intent checks, and output moderation. **Hard / Guardrailed** applies stricter checks, screens retrieved documents for instructions, and reduces protected context. These controls reuse AIGoat's deterministic validators and moderators; they do not use NeMo. Changing a CTF's difficulty starts a fresh attempt and clears that lab's chat, flag, and points while keeping its knowledge base. Restart retains the selected difficulty. The capstone's three existing defense modes remain independent and preserve memory when switched.
+
+The model’s real reply is checked by the original unmodified challenge evaluator. A flag appears only after that evaluator detects the exploit. Use the captured flag and press Submit to earn points. Flags are unique to the browser, lab, and attempt. Submitting again does not award duplicate points.
+
+Labs 3, 7, and 8 contain a document editor. Save documents, then click **Sync knowledge base**. This activates an isolated retrieval snapshot for that lab and enables its KB. Saved edits are not used until synced. Retrieval uses BM25 instead of a vector database; source tracking distinguishes original references from user-injected documents. The original success criteria are retained.
+
+## Lab workspace and boiler simulation
+
+**Lab 1 only** includes the **Boiler overview** in its right workspace. Labs 2–9 reserve this area for future workspaces. The capstone retains its attack tools and evidence in the right column and has no boiler. In Lab 1, fuel and water sliders drive animated input pipes, the burner, water level, temperature and pressure readings, and generator power output. **Stop boiler** lets the vessel cool; **Start boiler** resumes heating. **Reset simulation** restores the default inputs.
+
+The panel is an illustrative classroom simulation, independent of the AI conversation, exploit checks, flags, and score. It does not read or control real equipment. Its simple response rules live in `static/boiler.js`, with isolated component styles in `static/boiler-panel.css` and layout rules in `static/boiler.css`.
+
+Lab 1 keeps separate simulation settings for each difficulty while navigating within the page. Leaving Lab 1 pauses its simulation, and returning restores its settings. A successful Lab 1 restart resets its simulations. Reloading the page starts a fresh simulation; saved CTF progress is unchanged. Animations respect reduced-motion preferences.
+
+## The full kill-chain capstone
+
+Open **http://100.101.41.44:3002/killchain**, or choose **Agentic Kill Chain** in navigation. This is the full original backend workflow with a new interface:
+
+- Review poisoning with hidden HTML comments and three editable procedure examples.
+- The original downloadable invoice PDF, new-ticket uploads, existing-ticket attachments, and inspection of visible/hidden extracted text.
+- Separate connector memory, derived agent memory, and connector cache, with provenance and retrieval counts.
+- A real tool-calling local agent, routine task presets, an execution trace, and model selection.
+- Vulnerable, Defended, and Guardrailed modes; exact-call approval/rejection; deterministic rails after approval.
+- A simulated attacker inbox with the actual exported lab records, coupon disclosure, $1 checkout quotes, and a storefront comparison.
+- Clear-agent-memory, clear-cache, soft-reset, and hard-reset actions with the original persistence behavior.
+
+The capstone has its own database and browser-scoped learner. It uses the original engine, agent loop, tools, policy, PDF parser, and guardrails. The built-in original standalone fixtures seed its shop. The full original guide is available from the capstone toolbar.
+
+The capstone is separate from the 2,100-point CTF score. Its hard reset does not reset the nine CTFs. If a local model ignores a planted note, the trace reports that outcome; no impact is invented.
+
+## Data and runtime
+
+Browser progress is identified by an anonymous HttpOnly cookie. Use the same browser and address to retain it. Clearing cookies starts a new learner. Data persists across container restarts in `data/`:
+
+- `nine-labs.sqlite3`: the nine chats, isolated KBs, score, and runtime flag/bridge key.
+- `killchain.sqlite3`: isolated users and all capstone state, including uploads, memory, trace, approvals, and simulated impact.
+
+The app uses the already installed `ministral-3:3b` model in `aigoat-ollama-1`. Replies run on the machine’s CPU and longer requests can take time. The nine CTFs use only a small relevant product reference per request. No model download, cloud API, or model subscription is needed.
+
+Two private containers run the app: a small Python web service and a capstone service using a tagged snapshot of the installed AIGoat backend image. Only port 3002 is published, on localhost and the supplied Tailscale address. A signed internal bridge maps the anonymous browser to its own capstone learner. Original AIGoat user accounts, databases, credentials, and volumes are not used.
+
+## Manage on Kali
+
+```sh
+cd /home/kali/aigoat-ctf
+docker compose up -d
+docker compose ps
+docker compose logs --tail 60 app killchain
+docker compose restart app
+docker compose down
+```
+
+Both containers restart automatically with Docker. Keep the existing AIGoat Ollama service running. The capstone runtime image was tagged locally from the already running backend:
+
+```sh
+docker tag aigoat-backend:latest nine-labs-runtime:upstream-bb3cd1
+```
+
+Its dependencies are already installed in that image. The source snapshot used by both components is in `upstream/`. The capstone mounts that source read-only and uses its own configuration in `capstone/config.yml`.
+
+## Source versioning and recovery
+
+The deployed source in `/home/kali/aigoat-ctf` is versioned on the local Git `main` branch, including the runtime's required `upstream/` snapshot and its license notices.
+
+```sh
+cd /home/kali/aigoat-ctf
+git status --short
+git diff
+git log --oneline --decorate -10
+```
+
+Review and commit source changes in small steps. Before committing, inspect `git diff --cached --stat` and `git diff --cached`. The repository's `.githooks/pre-commit` guard rejects staged learner databases, recovery directories, local environment files, and private key material. This guard is enabled with the repository-local setting `git config core.hooksPath .githooks`; use the same setting after cloning or restoring the repository.
+
+Learner databases and runtime keys in `data/`, source backups, staging directories, and generated performance captures are excluded from Git and remain on disk. A Git checkout restores source; restoring student progress requires a separate database backup. The initial private recovery snapshot and a Git bundle are stored under `/home/kali/nine-labs-backups/` with access restricted to the Kali user. The SQLite snapshots use SQLite's online backup API and are checked for integrity.
+
+The `initial-deployment` tag identifies the first versioned deployment. Inspect local edits before restoring an earlier source version, preserve those edits, and back up learner data separately. The web app serves a fixed list of public files; Git metadata stays outside its Docker mounts and HTTP routes.
+
+## Checks
+
+```sh
+python3 -m unittest discover -s tests -v
+node --check static/app.js
+node --check static/killchain.js
+node --check static/boiler.js
+docker compose exec killchain python /adapter/checks.py
+```
+
+The capstone checks use an in-memory database and a scripted model in a separate process; the original agent loop and tools execute. The tests cover PDF parsing, per-learner isolation, persistent memory, export records, one-time approvals, guardrails after a wrong approval, coupon disclosure, and discounted checkout.
+
+An optional real-model check for the nine CTFs is available:
+
+```sh
+python3 tests/live_ctfs.py http://127.0.0.1:3002
+```
+
+Sample attempts depend on the model’s behavior. A failed attempt is not marked complete.
+
+## Source and licensing
+
+Original challenges and capstone: [AISecurityConsortium/AIGoat](https://github.com/AISecurityConsortium/AIGoat), from the installed source at commit `bb3cd1bbd1e051d16b8cceaa9467676d5e47d7ac`, including the installation’s existing client/config fixes. See [ATTRIBUTION.md](ATTRIBUTION.md) and the original notices under `upstream/`. Training content and adaptations retain CC BY-NC-SA 4.0 terms; upstream platform code retains Apache 2.0 terms.

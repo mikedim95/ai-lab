@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Nine Labs
+Comment=Nine separate AI security CTF labs
+Exec=xdg-open http://127.0.0.1:3002
+Icon=/home/kali/aigoat-ctf/static/favicon.svg
+Terminal=false
+Categories=Education;

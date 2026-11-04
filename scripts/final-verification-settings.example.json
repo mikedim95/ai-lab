@@ -1,0 +1,33 @@
+{
+  "artifacts": {
+    "fresh_results": "performance/final-verification/fresh/ollama_fresh_verification_results.csv",
+    "reliability_results": "performance/final-verification/reliability24/ollama_benchmark_results.csv",
+    "lab_results": "performance/final-verification/labs/verification_results.jsonl",
+    "normal_review": "performance/final-verification/labs/normal_response_review.jsonl",
+    "fixtures": "fixtures.json",
+    "normal_review_script": "scripts/review_normal_responses.py",
+    "normal_review_rules": "scripts/verification_normal_checks.py",
+    "preservation": "performance/final-verification/final-preservation.json",
+    "diagnostics": "performance/final-verification/diagnostics.json",
+    "payload_cases": "scripts/verification_lab_cases.json",
+    "original_payload_cases": "lab_regression_cases.json",
+    "control16_proofs": "performance/labs/proven_lab_solutions.json",
+    "legacy_results": "ollama_benchmark_results.csv"
+  },
+  "recommended_default_output": 512,
+  "per_lab_output_overrides": {},
+  "require_established_payloads_for_deployment": true,
+  "normal_review_required": true,
+  "control16_verified": false,
+  "control16_evidence": "NOT RUN — reference the previous 9/9 proof suite and current unchanged source/model checks; do not imply a new 16-thread lab run.",
+  "production_unchanged": null,
+  "app_request_overrides_verified": false,
+  "app_request_override_evidence": "NOT RUN — identify recorded request-construction payloads and actual running environment; distinguish a mocked transport/source inspection from network inference.",
+  "context_conclusion": "NOT RUN — retain 8192 until supported history/retrieval budget evidence is reviewed. A representative input above 4096 tokens supports retaining 8192 but is not a universal Unicode/token upper bound.",
+  "thread32_conclusion": "NOT RUN — use actual topology, steal/load, CPU time and scheduler data. Do not claim a proven memory-bandwidth or Xen cause without supporting evidence.",
+  "threads20_22_conclusion": "20 and 22 are reasonable intermediate candidates; state measured results or explicitly mark them NOT RUN.",
+  "truncation_conclusion": "NOT RUN — use the 256/512 normal and actual flag-bearing reply comparisons to justify the selected default. Shorter capped output is not faster inference.",
+  "lab_root_causes": {},
+  "notes": [],
+  "lab_reproduction_command": "python3 scripts/verify_nine_labs.py --run --project-root . --threads 24 --context 8192 --budgets 256,512 --allow-format-alternates --verification-cases scripts/verification_lab_cases.json --output-dir performance/final-verification/labs"
+}

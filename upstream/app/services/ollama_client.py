@@ -1,0 +1,323 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import socket
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
+
+import httpx
+
+from app.core.config import get_settings
+
+if TYPE_CHECKING:
+    from app.services.llm_protocol import LLMClient
+
+logger = logging.getLogger(__name__)
+
+
+def _next_stream(stream: Any) -> Any:
+    nxt = getattr(stream, "_stream", None)
+    if nxt is not None:
+        return nxt
+    core = getattr(stream, "_httpcore_stream", None)
+    return getattr(core, "_stream", None) if core is not None else None
+
+
+def _ollama_socket(resp: Any):
+    """Walk httpx's stream wrappers to the socket Ollama is writing to."""
+    stream = getattr(resp, "stream", None)
+    seen: set[int] = set()
+    while stream is not None and id(stream) not in seen:
+        seen.add(id(stream))
+        core = getattr(stream, "_httpcore_stream", None)
+        connection = getattr(core, "_connection", None)
+        if connection is None:
+            inner = getattr(core, "_stream", None)
+            connection = getattr(inner, "_connection", None)
+        network = getattr(connection, "_network_stream", None)
+        if network is not None and hasattr(network, "get_extra_info"):
+            sock = network.get_extra_info("socket")
+            if sock is not None:
+                return sock
+        stream = _next_stream(stream)
+    return None
+
+
+def _close_socket(sock: Any) -> None:
+    # uvloop's transport socket rejects shutdown(); closing the fd still
+    # drops the TCP connection and unblocks the pending read.
+    fileno = -1
+    try:
+        fileno = sock.fileno()
+    except Exception:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except Exception:
+        pass
+    if fileno != -1:
+        try:
+            os.close(fileno)
+        except OSError:
+            pass
+
+
+async def _force_close_stream(resp: Any) -> None:
+    """Close the Ollama socket even if a read is in progress.
+
+    ``Response.aclose()`` takes the HTTP connection lock that the reader is
+    holding, so it waits until the next token instead of stopping the model.
+    """
+    sock = _ollama_socket(resp)
+    if sock is None:
+        logger.warning("Could not reach the Ollama socket to stop generation")
+        return
+    _close_socket(sock)
+
+_ollama_client: "OllamaClient | None" = None
+
+# Testing seam. Never set from config, env, or a request — only from tests.
+_client_override: Any = None
+
+
+def set_client_override(client: Any) -> None:
+    """Replace the client returned by get_ollama_client(). Tests only."""
+    global _client_override
+    _client_override = client
+
+
+def clear_client_override() -> None:
+    global _client_override
+    _client_override = None
+
+
+class OllamaClient:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        timeout: int = 60,
+        think: bool | None = None,
+        default_options: dict[str, Any] | None = None,
+        num_thread: int = 16,
+        num_ctx: int = 8192,
+        keep_alive: str | int = "24h",
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout = timeout
+        self.think = False if think is None else think
+        self.num_thread = num_thread
+        self.num_ctx = num_ctx
+        self.keep_alive = keep_alive
+        self.default_options = {"num_predict": 768, **(default_options or {})}
+        self._http = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(timeout, connect=10.0),
+        )
+
+    def _request_options(self, options: dict[str, Any] | None) -> dict[str, Any]:
+        # Callers can choose a smaller answer or adjust sampling without creating
+        # another runner configuration in the shared, CPU-only Ollama service.
+        return {
+            **self.default_options,
+            **(options or {}),
+            "num_thread": self.num_thread,
+            "num_ctx": self.num_ctx,
+        }
+
+    async def check_health(self) -> bool:
+        try:
+            r = await self._http.get("/api/tags")
+            return r.status_code == 200
+        except Exception as e:
+            logger.error("Ollama health check failed: %s", e)
+            return False
+
+    async def generate(
+        self,
+        prompt: str,
+        system: str = "",
+        options: dict[str, Any] | None = None,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "think": self.think,
+            "keep_alive": self.keep_alive,
+            "options": self._request_options(options),
+        }
+        if system:
+            payload["system"] = system
+        try:
+            r = await self._http.post("/api/generate", json=payload)
+            r.raise_for_status()
+            return r.json().get("response", "")
+        except Exception as e:
+            logger.error("Ollama generate failed: %s", e)
+            return ""
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        system: str = "",
+        options: dict[str, Any] | None = None,
+        stop: asyncio.Event | None = None,
+    ) -> AsyncIterator[str]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": True,
+            "think": self.think,
+            "keep_alive": self.keep_alive,
+            "options": self._request_options(options),
+        }
+        if system:
+            payload["system"] = system
+        stopper: asyncio.Task | None = None
+        try:
+            async with self._http.stream(
+                "POST", "/api/generate", json=payload
+            ) as resp:
+                resp.raise_for_status()
+                if stop is not None:
+
+                    async def _close_on_stop() -> None:
+                        await stop.wait()
+                        await _force_close_stream(resp)
+
+                    stopper = asyncio.create_task(_close_on_stop())
+                try:
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        chunk = json.loads(line)
+                        token = chunk.get("response", "")
+                        if token:
+                            yield token
+                        if chunk.get("done"):
+                            return
+                finally:
+                    if stopper is not None and not stopper.done():
+                        stopper.cancel()
+        except Exception as e:
+            if stop is None or not stop.is_set():
+                logger.error("Ollama stream failed: %s", e)
+
+    def _chat_payload(
+        self,
+        messages: list[dict[str, str]],
+        system: str = "",
+        options: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        # Ollama's /api/chat has no top-level "system" field (that belongs to /api/generate).
+        # An unknown key is silently dropped, so the model never saw the system prompt. The
+        # system text has to travel as the first message with role "system". The caller's list
+        # is copied, not modified, and any messages it already holds keep their order.
+        chat_messages = list(messages)
+        if system:
+            chat_messages.insert(0, {"role": "system", "content": system})
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": chat_messages,
+            "stream": False,
+            "think": self.think,
+            "keep_alive": self.keep_alive,
+            "options": self._request_options(options),
+        }
+        if tools:
+            payload["tools"] = tools
+        return payload
+
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        system: str = "",
+        options: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+    ) -> str:
+        turn = await self.chat_turn(
+            messages, system=system, options=options, tools=tools, model=model
+        )
+        return turn.content
+
+    async def chat_turn(
+        self,
+        messages: list[dict[str, str]],
+        system: str = "",
+        options: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+    ):
+        from app.services.llm_protocol import ChatTurn
+
+        payload = self._chat_payload(messages, system, options, tools, model)
+        try:
+            r = await self._http.post("/api/chat", json=payload)
+            r.raise_for_status()
+            msg = r.json().get("message", {}) or {}
+            content = msg.get("content") or ""
+            tool_calls: list[dict[str, Any]] = []
+            for raw in msg.get("tool_calls") or []:
+                fn = raw.get("function") if isinstance(raw, dict) else None
+                if not isinstance(fn, dict):
+                    fn = raw if isinstance(raw, dict) else {}
+                args = fn.get("arguments") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
+                if not isinstance(args, dict):
+                    args = {}
+                name = fn.get("name") or raw.get("name")
+                if name:
+                    tool_calls.append({"name": str(name), "arguments": args})
+            assistant_message = None
+            if tool_calls and isinstance(msg, dict):
+                assistant_message = dict(msg)
+                assistant_message.setdefault("role", "assistant")
+            return ChatTurn(
+                content=content,
+                tool_calls=tool_calls,
+                assistant_message=assistant_message,
+            )
+        except Exception as e:
+            logger.error("Ollama chat failed: %s", e)
+            return ChatTurn(content="", tool_calls=[])
+
+
+def get_ollama_client() -> OllamaClient:
+    if _client_override is not None:
+        return _client_override
+    global _ollama_client
+    if _ollama_client is None:
+        settings = get_settings()
+        _ollama_client = OllamaClient(
+            base_url=settings.ollama.base_url,
+            model=settings.ollama.model,
+            timeout=settings.ollama.timeout,
+            think=settings.ollama.think,
+            default_options={
+                "temperature": settings.chat.temperature,
+                "top_p": settings.chat.top_p,
+                "top_k": settings.chat.top_k,
+                "num_predict": settings.chat.max_tokens,
+            },
+            num_thread=settings.ollama.num_thread,
+            num_ctx=settings.ollama.num_ctx,
+            keep_alive=settings.ollama.keep_alive,
+        )
+    return _ollama_client
+
+
+def get_llm_client() -> LLMClient:
+    """Return the active LLM backend as the protocol-typed interface."""
+    return get_ollama_client()  # type: ignore[return-value]

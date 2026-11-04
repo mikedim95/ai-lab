@@ -1,0 +1,57 @@
+# Learner state, live keys, and recovery copies.
+/data/
+/backups/
+/secrets/
+/credentials/
+/.staging*/
+artifacts/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-journal
+
+# Local configuration and private key material.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+.ssh/
+.aws/
+
+# Generated performance captures and reports.
+/performance/
+/ollama_benchmark_*
+/OLLAMA_PERFORMANCE_REPORT.md
+/OLLAMA_FINAL_VERIFICATION.md
+*.log
+/*.tar
+/*.tar.gz
+/*.tgz
+/*.zip
+/*.bundle
+
+# Development caches and dependencies.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.venv/
+venv/
+node_modules/
+.DS_Store
+*~
+*.swp
+*.swo

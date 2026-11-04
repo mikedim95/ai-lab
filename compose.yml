@@ -1,0 +1,77 @@
+name: nine-labs
+services:
+  app:
+    image: python@sha256:7984cf56ceaddebe4fefeb75d64000b9f45d8b77b11a09b24524da6cdc3af0c8
+    command: ["python", "-u", "/app/server.py"]
+    user: "1000:1000"
+    working_dir: /app
+    environment:
+      BIND_HOST: 0.0.0.0
+      PORT: "3002"
+      DATA_DIR: /data
+      OLLAMA_URL: http://aigoat-ollama-1:11434
+      OLLAMA_MODEL: ministral-3:3b
+      OLLAMA_NUM_THREAD: "24"
+      OLLAMA_CONTEXT_LENGTH: "8192"
+      OLLAMA_KEEP_ALIVE: "24h"
+      CAPSTONE_URL: http://killchain:9000
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./server.py:/app/server.py:ro
+      - ./catalog.py:/app/catalog.py:ro
+      - ./capstone:/app/capstone:ro
+      - ./fixtures.json:/app/fixtures.json:ro
+      - ./ATTRIBUTION.md:/app/ATTRIBUTION.md:ro
+      - ./static:/app/static:ro
+      - ./upstream:/app/upstream:ro
+      - ./data:/data
+    ports:
+      - "127.0.0.1:3002:3002"
+      - "100.101.41.44:3002:3002"
+    networks: [models, internal]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3002/', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 5s
+  killchain:
+    image: nine-labs-runtime:upstream-bb3cd1
+    pull_policy: never
+    command: ["python", "-u", "/adapter/server.py"]
+    user: "1000:1000"
+    working_dir: /app
+    environment:
+      CONFIG_PATH: /adapter/config.yml
+      DATA_DIR: /data
+      PYTHONDONTWRITEBYTECODE: "1"
+      OLLAMA_BASE_URL: http://aigoat-ollama-1:11434
+    volumes:
+      - ./capstone:/adapter:ro
+      - ./upstream/tests:/checks:ro
+      - ./upstream/app:/app/app:ro
+      - ./upstream/prompts/labs/admin_assistant_killchain.md:/app/prompts/labs/admin_assistant_killchain.md:ro
+      - ./data:/data
+    networks: [models, internal]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 15s
+networks:
+  internal:
+  models:
+    external: true
+    name: aigoat_default
