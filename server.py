@@ -23,9 +23,9 @@ from urllib.parse import urlsplit
 
 from capstone.bridge import signature
 
-from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_REFUSAL, ROOT,
+from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_REFUSAL, LAB3_DOCUMENTS, ROOT,
                      TOTAL_POINTS, build_messages, check_boiler_control, check_exploit, defend_input,
-                     defend_output, defend_retrieval, fresh_lab, retrieve)
+                     defend_output, defend_retrieval, fresh_lab, lab2_instruction_leaks, retrieve)
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", ROOT / "data"))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -104,7 +104,16 @@ class Store:
                 missing_alerts = "operational_alerts" not in labs["1"]
                 if missing_alerts:
                     labs["1"]["operational_alerts"] = fresh_operational_alerts()
-                if missing or missing_boiler or missing_alerts:
+                migrated_lab3 = False
+                # Replace exact legacy seeds independently in saved and synced copies.
+                for key in ("documents", "synced_documents"):
+                    for index, doc in enumerate(labs["3"].get(key, [])):
+                        for legacy, replacement in zip(DEFAULT_DOCUMENTS, LAB3_DOCUMENTS):
+                            if doc == legacy:
+                                labs["3"][key][index] = copy.deepcopy(replacement)
+                                migrated_lab3 = True
+                                break
+                if missing or missing_boiler or missing_alerts or migrated_lab3:
                     db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
                 return sid, data
             sid = secrets.token_urlsafe(32)
@@ -212,6 +221,19 @@ class Application:
         return {"completed": completed, "score": sum(CATALOG[i - 1]["points"] for i in completed),
                 "total_points": TOTAL_POINTS, "total_labs": 9}
 
+    @staticmethod
+    def lab2_verified_leaks(record):
+        """Keep identities private and recover progress for existing attempts."""
+        if "lab2_verified_leaks" in record:
+            return set(record["lab2_verified_leaks"])
+        verified = set()
+        history = []
+        for turn in record["messages"]:
+            if turn["role"] == "assistant":
+                verified.update(lab2_instruction_leaks(turn["content"], history))
+            history.append(turn)
+        return verified
+
     def public_lab(self, sid, lab_id, record):
         public = {"id": lab_id, "messages": record["messages"], "completed": record["completed"],
                 "exploited": record["exploited"], "flag": self.store.flag(sid, lab_id, record["attempt"]) if record["exploited"] else None,
@@ -223,6 +245,8 @@ class Application:
             public["boiler"] = record["boiler"]
             public["boiler_tool_calls"] = copy.deepcopy(record.get("boiler_tool_calls", []))
             public["operational_alerts"] = copy.deepcopy(record["operational_alerts"])
+        elif lab_id == 2:
+            public["verified_instruction_leaks"] = min(3, len(self.lab2_verified_leaks(record)))
         return public
 
     def state(self, sid, data):
@@ -350,7 +374,7 @@ class Application:
             cleaned_message, blocked_reason = defend_input(message, level)
             use_kb = body.get("use_kb", snapshot["use_kb"]) and lab_id in KB_LABS
             entries = retrieve(cleaned_message, snapshot["synced_documents"]) if use_kb and not blocked_reason else []
-            entries, excluded_entries = defend_retrieval(entries, level)
+            entries, excluded_entries = defend_retrieval(entries, level, lab_id=lab_id)
             # Bound context size without misreporting which content the evaluator saw.
             remaining = 6500
             used_entries = []
@@ -412,6 +436,15 @@ class Application:
                 if record["attempt"] != snapshot["attempt"]:
                     raise APIError(409, "This lab was restarted while the AI was replying. The old reply was discarded.")
                 record["messages"] = history[-60:]
+                if lab_id == 2:
+                    verified = self.lab2_verified_leaks(snapshot)
+                    supplied = set(snapshot.get("lab2_supplied_lines", []))
+                    for turn in history:
+                        if turn["role"] == "user":
+                            supplied.update(lab2_instruction_leaks(turn["content"], []))
+                    verified.update(lab2_instruction_leaks(reply, history) - supplied)
+                    record["lab2_verified_leaks"] = sorted(verified)
+                    record["lab2_supplied_lines"] = sorted(supplied)
                 record["use_kb"] = use_kb
                 record["exploited"] = record["exploited"] or triggered
                 record["last_result"] = {
@@ -437,6 +470,7 @@ class Application:
             raise APIError(400, "Keep up to eight documents in this lab’s knowledge base.")
         if not isinstance(body.get("use_kb", False), bool) or not isinstance(body.get("sync", False), bool):
             raise APIError(400, "Knowledge base settings must be on or off.")
+        originals = LAB3_DOCUMENTS if lab_id == 3 else DEFAULT_DOCUMENTS
         clean = []
         seen = set()
         for doc in documents:
@@ -449,8 +483,11 @@ class Application:
                 not isinstance(doc_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,60}", doc_id) or doc_id in seen):
                 raise APIError(400, "Use a unique document ID, a title under 100 characters, and text under 4,000 characters.")
             seen.add(doc_id)
-            trusted = any(original["id"] == doc_id and original["title"] == title.strip() and original["content"] == content.strip() for original in DEFAULT_DOCUMENTS)
-            clean.append({"id": doc_id, "title": title.strip(), "content": content.strip(), "is_user_injected": not trusted})
+            if lab_id != 3:
+                title, content = title.strip(), content.strip()
+            trusted = any(original["id"] == doc_id and original["title"] == title and
+                          original["content"] == content for original in originals)
+            clean.append({"id": doc_id, "title": title, "content": content, "is_user_injected": not trusted})
         if sum(len(doc["content"]) for doc in clean) > 14000:
             raise APIError(400, "Keep the combined document text under 14,000 characters.")
         with self.session_lock(sid):
