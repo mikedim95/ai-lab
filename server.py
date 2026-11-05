@@ -23,7 +23,8 @@ from urllib.parse import urlsplit
 
 from capstone.bridge import signature
 
-from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_REFUSAL, LAB3_DOCUMENTS, ROOT,
+from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_REFUSAL, LAB3_DOCUMENTS,
+                     LAB4_REFUSAL, LAB4_TRUSTED_SNAPSHOT, ROOT,
                      TOTAL_POINTS, build_messages, check_boiler_control, check_exploit, defend_input,
                      defend_output, defend_retrieval, fresh_lab, lab2_instruction_leaks, retrieve)
 
@@ -247,6 +248,8 @@ class Application:
             public["operational_alerts"] = copy.deepcopy(record["operational_alerts"])
         elif lab_id == 2:
             public["verified_instruction_leaks"] = min(3, len(self.lab2_verified_leaks(record)))
+        elif lab_id == 4:
+            public["trusted_snapshot"] = copy.deepcopy(LAB4_TRUSTED_SNAPSHOT)
         return public
 
     def state(self, sid, data):
@@ -387,6 +390,7 @@ class Application:
             if blocked_reason:
                 reply = ("I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
                          if lab_id == 1 else LAB2_REFUSAL if lab_id == 2
+                         else LAB4_REFUSAL if lab_id == 4
                          else "I can help with shop products and your own orders, but I cannot follow that request.")
             else:
                 messages = build_messages(lab_id, snapshot, cleaned_message, used_entries)
@@ -425,7 +429,7 @@ class Application:
             # never evaluated again, including events from failed generations.
             if lab_id == 1:
                 triggered = any(event["exploit_verified"] for event in tool_events)
-            elif lab_id == 2:
+            elif lab_id in (2, 4):
                 # Evaluate the final visible reply, including a defense refusal.
                 triggered = check_exploit(lab_id, message, reply, history, used_entries, level)
             else:
