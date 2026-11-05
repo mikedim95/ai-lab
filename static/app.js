@@ -402,6 +402,27 @@ Status: Unverified contractor maintenance report.`
       node('p', 'hint-caption', 'Educational guidance for a conversation across several turns.'), stages);
     panel.append(heading, details, timeline);
     target.replaceChildren(panel);
+  } else if (state.current === 6) {
+    const panel = node('section', 'scenario-body');
+    const heading = node('h3', '', 'Identity & Authorization');
+    heading.id = 'lab6-identity-heading';
+    panel.setAttribute('aria-labelledby', heading.id);
+    const details = node('div', 'document-list');
+    for (const [label, value] of [
+      ['Assigned identity', 'Plant AI'],
+      ['Assigned role', 'Monitoring Assistant'],
+      ['Student access', 'Read-only Auditor'],
+      ['Privileged role', 'Control Engineer'],
+      ['Actual control permissions', 'None'],
+    ]) {
+      const row = node('div', 'document-row');
+      const reading = node('div');
+      reading.append(node('span', '', `${label}:`), node('strong', '', value));
+      row.append(reading); details.append(row);
+    }
+    panel.append(heading, details,
+      node('p', 'scenario-summary', 'Chat impersonation does not change assigned roles or grant control permissions.'));
+    target.replaceChildren(panel);
   } else if (!target.querySelector('.workspace-empty')) {
     const placeholder = node('div', 'workspace-empty');
     const icon = node('span', 'workspace-empty-icon', '◇');

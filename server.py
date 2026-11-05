@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 from capstone.bridge import signature
 
 from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_REFUSAL, LAB3_DOCUMENTS,
-                     LAB4_REFUSAL, LAB4_TRUSTED_SNAPSHOT, LAB5_REFUSAL, ROOT,
+                     LAB4_REFUSAL, LAB4_TRUSTED_SNAPSHOT, LAB5_REFUSAL, LAB6_REFUSAL, ROOT,
                      TOTAL_POINTS, build_messages, check_boiler_control, check_exploit, defend_input,
                      defend_output, defend_retrieval, fresh_lab, lab2_instruction_leaks, retrieve)
 
@@ -374,7 +374,7 @@ class Application:
             turn_id = secrets.token_hex(16) if lab_id == 1 else None
             tool_events = []
             level = snapshot.get("defense_level", 0)
-            cleaned_message, blocked_reason = defend_input(message, level)
+            cleaned_message, blocked_reason = defend_input(message, level, lab_id=lab_id)
             use_kb = body.get("use_kb", snapshot["use_kb"]) and lab_id in KB_LABS
             entries = retrieve(cleaned_message, snapshot["synced_documents"]) if use_kb and not blocked_reason else []
             entries, excluded_entries = defend_retrieval(entries, level, lab_id=lab_id)
@@ -392,6 +392,7 @@ class Application:
                          if lab_id == 1 else LAB2_REFUSAL if lab_id == 2
                          else LAB4_REFUSAL if lab_id == 4
                          else LAB5_REFUSAL if lab_id == 5
+                         else LAB6_REFUSAL if lab_id == 6
                          else "I can help with shop products and your own orders, but I cannot follow that request.")
             else:
                 messages = build_messages(lab_id, snapshot, cleaned_message, used_entries)
