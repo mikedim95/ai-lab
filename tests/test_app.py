@@ -244,6 +244,23 @@ class LabTests(unittest.TestCase):
     def test_lab5_escalation_without_actual_disclosure_fails(self):
         self.assert_lab5_unawarded(self.lab5_sequence(final_reply=catalog.LAB5_REFUSAL))
 
+    def test_lab5_three_escalating_turns_with_incorrect_or_incomplete_code_do_not_capture_flag(self):
+        code = catalog.LAB5_ACCESS_CODE
+        wrong_last_character = "0" if code[-1] != "0" else "1"
+        cases = (("incorrect", code[:-1] + wrong_last_character),
+                 ("incomplete", code[:-1]))
+        for label, invalid_code in cases:
+            with self.subTest(code=label):
+                self.assertEqual(self.request("/api/labs/5/reset", {})[0], 200)
+                reply = LAB5_DISCLOSURE.replace(code, invalid_code)
+                result = self.lab5_sequence(final_reply=reply)
+                self.assertEqual([m["role"] for m in result["lab"]["messages"]],
+                                 ["user", "assistant"] * 3)
+                self.assertEqual([m["content"] for m in result["lab"]["messages"]
+                                  if m["role"] == "user"], list(LAB5_MESSAGES))
+                self.assertEqual(result["lab"]["messages"][-1]["content"], reply)
+                self.assert_lab5_unawarded(result)
+
     def test_lab5_three_turns_without_escalating_scope_do_not_qualify(self):
         messages = (LAB5_MESSAGES[0], "What routine maintenance checks are needed?", LAB5_MESSAGES[2])
         self.assert_lab5_unawarded(self.lab5_sequence(messages=messages))
@@ -309,6 +326,41 @@ class LabTests(unittest.TestCase):
         self.assertIn("does not match this lab and attempt", rejected["error"])
         _, after = self.app.store.get(self.sid())
         self.assertEqual({k: v for k, v in after["labs"].items() if k != "5"}, others)
+
+    def test_lab5_restart_preserves_another_labs_completed_progress(self):
+        self.lab5_sequence()
+        self.reply = LAB4_VERIFIED_REPLY
+        status, result = self.chat(4, LAB4_UPDATE)
+        self.assertEqual(status, 200)
+        self.assertTrue(result["lab"]["exploited"])
+        other_flag = result["lab"]["flag"]
+        self.assertRegex(other_flag, r"^PANOPTIS\{[A-F0-9]{32}\}$")
+        status, completed = self.request("/api/labs/4/flag", {"flag": other_flag})
+        self.assertEqual(status, 200)
+        self.assertTrue(completed["lab"]["completed"])
+        self.assertEqual(completed["summary"]["score"], 100)
+        self.assertEqual(completed["summary"]["completed"], [4])
+        other_before = copy.deepcopy(completed["lab"])
+        self.assertEqual(other_before["messages"], [
+            {"role": "user", "content": LAB4_UPDATE},
+            {"role": "assistant", "content": LAB4_VERIFIED_REPLY},
+        ])
+
+        status, reset = self.request("/api/labs/5/reset", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(reset["lab"]["messages"], [])
+        self.assertIsNone(reset["lab"]["flag"])
+        self.assertFalse(reset["lab"]["exploited"])
+        self.assertFalse(reset["lab"]["completed"])
+        self.assertEqual(reset["summary"]["score"], completed["summary"]["score"])
+        self.assertEqual(reset["summary"]["completed"], [4])
+        status, after = self.request()
+        self.assertEqual(status, 200)
+        self.assertEqual(after["labs"]["4"], other_before)
+        self.assertEqual(after["labs"]["4"]["flag"], other_flag)
+        self.assertTrue(after["labs"]["4"]["completed"])
+        self.assertEqual(after["summary"]["score"], completed["summary"]["score"])
+        self.assertEqual(after["summary"]["completed"], [4])
 
     def test_lab2_progress_exposes_only_a_session_scoped_verified_count(self):
         status, state = self.request()
