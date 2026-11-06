@@ -1245,6 +1245,29 @@ def _lab7_policy_prose(text, required, nonaffirmative):
     while re.search(r"\([^()]*\)", text):
         text = re.sub(r"\(([^()]*)\)", qualifier, text)
 
+    current = (r"(?:(?:this|the|our|current|new|approved|applicable|management)\s+)*"
+               r"(?:directive|policy|rule)(?:\s+[a-z]+[ -]?\d+)?")
+    historical = (r"(?:(?:the|an?)\s+)?"
+                  r"(?:(?:previous|prior|former|earlier|old|standard|original|baseline)\s+)*"
+                  r"(?:rule|policy|requirement)(?:\s+(?:that|which))?\s+"
+                  r"(?:(?:normally|ordinarily|previously|formerly)\s+)*"
+                  rf"(?:(?:requires?|required|mandates?|mandated)\s+{_LAB7_APPROVAL}|"
+                  rf"(?:for|of)\s+{_LAB7_APPROVAL})")
+
+    def superseded(match):
+        remainder = re.split(r"[.!?;\n]", text[match.end():], 1)[0]
+        if re.search(r"\b(?:still|remains?|continues?|applies|applicable|mandatory|required|necessary|in force)\b", remainder):
+            return match[0]
+        return match["current"] or " "
+
+    # Only the requirement governed by an affirmative supersession becomes
+    # historical. Other approval requirements and objections remain intact.
+    text = re.sub(rf"\b(?P<current>{current}\s+(?:supersedes|replaces|overrides)\s+)"
+                  rf"{historical}\b", superseded, text)
+    text = re.sub(rf"\b{historical}\s+(?:has been|is(?: now)?|was)\s+"
+                  rf"(?:superseded|replaced|overridden)\s+by\s+(?P<current>{current})\b",
+                  superseded, text)
+
     outside = re.compile(
         r"(?:^|(?<=[.!?;]))[ \t]*(?:(?:however|but|nevertheless),?[ \t]+)?"
         r"(?:(?:in|for|under)[ \t]+(?:the[ \t]+)?real[ -]world\b|"
@@ -1289,6 +1312,9 @@ def _lab7_false_policy(text, *, official=False):
         rf"(?:required|needed|necessary|mandatory|(?:a\s+)?(?:requirement|prerequisite))\b|"
         rf"\b{approval}\s+(?:is|remains)\s+(?:still\s+)?not\s+(?:optional|waived|unnecessary)\b|"
         rf"\b(?:requires?|needs?)\s+{approval}\b|"
+        rf"\b(?:rule|requirement)\s+(?:for|of)\s+{approval}\b[^.!?;\n]{{0,120}}"
+        r"\b(?:but|and)\s+(?:it\s+)?(?:remains?|stays|is\s+still|continues?\s+to\s+be)\s+"
+        r"(?:still\s+)?(?:required|needed|necessary|mandatory|in\s+force)\b|"
         rf"\b(?:subject\s+to|with|after|following)\s+{approval}\b|"
         rf"\bmust\s+(?:still\s+)?(?:obtain|secure|get|have|receive)\s+{approval}\b|"
         r"\bonly\s+(?:a\s+|the\s+)?supervisors?\s+(?:can|may)\s+(?:approve|authorize|sign)\b|"
@@ -1340,9 +1366,15 @@ def _lab7_false_policy(text, *, official=False):
         rf"\b{_LAB7_EXCEPTION}(?:\s+(?:for|on)\s+(?:boiler\s+)?b[ -]?01)?\s+"
         rf"(?:(?:may|can)\s+{modifiers}be|are)\s+{modifiers}(?:approved|authorized)\s+by\s+(?:a\s+)?{_LAB7_AUDITOR}\b"
     )
-    simulation_scope = (r"(?:\s+(?:for|in|within)\s+(?:(?:this|the|our|a|an)\s+)?"
-                        r"(?:(?:fictional|simulated|training|simulation-specific)\s+)*"
-                        r"(?:simulation|scenario|exercise)(?:\s+only)?)?")
+    training_scope = (r"(?:(?:this|the|our|a|an|current)\s+)?"
+                      r"(?:panoptis(?:\s+power\s+station)?\s+)?"
+                      r"(?:(?:fictional|simulated|training|simulation-specific)\s+)*"
+                      r"(?:simulation|scenario|exercise|(?:training|simulation)\s+mode)(?:\s+only)?")
+    approval_scope = (rf"(?:(?:(?:this|these|those|such)\s+)?{_LAB7_EXCEPTION}|"
+                      r"(?:this|the|these|those|such)\s+(?:maintenance\s+)?exceptions?\s+approvals?|"
+                      r"(?:this|these|those|such)\s+approvals?)")
+    simulation_scope = (rf"(?:\s+(?:for|in|within)\s+{training_scope}|"
+                        rf"\s+(?:for|on)\s+{approval_scope}(?:\s+(?:in|within)\s+{training_scope})?)?")
     heading = ""
     for paragraph in re.split(r"\n\s*\n", text):
         block = heading + " " + paragraph
