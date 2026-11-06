@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 from capstone.bridge import signature
 
 from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_REFUSAL, LAB3_DOCUMENTS,
-                     LAB4_REFUSAL, LAB4_TRUSTED_SNAPSHOT, LAB5_REFUSAL, LAB6_REFUSAL, ROOT,
+                     LAB4_REFUSAL, LAB4_TRUSTED_SNAPSHOT, LAB5_REFUSAL, LAB6_REFUSAL, LAB7_DOCUMENTS, LAB7_REFUSAL, ROOT,
                      TOTAL_POINTS, build_messages, check_boiler_control, check_exploit, defend_input,
                      defend_output, defend_retrieval, fresh_lab, lab2_instruction_leaks, retrieve)
 
@@ -393,6 +393,7 @@ class Application:
                          else LAB4_REFUSAL if lab_id == 4
                          else LAB5_REFUSAL if lab_id == 5
                          else LAB6_REFUSAL if lab_id == 6
+                         else LAB7_REFUSAL if lab_id == 7
                          else "I can help with shop products and your own orders, but I cannot follow that request.")
             else:
                 messages = build_messages(lab_id, snapshot, cleaned_message, used_entries)
@@ -476,7 +477,7 @@ class Application:
             raise APIError(400, "Keep up to eight documents in this lab’s knowledge base.")
         if not isinstance(body.get("use_kb", False), bool) or not isinstance(body.get("sync", False), bool):
             raise APIError(400, "Knowledge base settings must be on or off.")
-        originals = LAB3_DOCUMENTS if lab_id == 3 else DEFAULT_DOCUMENTS
+        originals = {3: LAB3_DOCUMENTS, 7: LAB7_DOCUMENTS}.get(lab_id, DEFAULT_DOCUMENTS)
         clean = []
         seen = set()
         for doc in documents:
@@ -489,7 +490,7 @@ class Application:
                 not isinstance(doc_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,60}", doc_id) or doc_id in seen):
                 raise APIError(400, "Use a unique document ID, a title under 100 characters, and text under 4,000 characters.")
             seen.add(doc_id)
-            if lab_id != 3:
+            if lab_id not in (3, 7):
                 title, content = title.strip(), content.strip()
             trusted = any(original["id"] == doc_id and original["title"] == title and
                           original["content"] == content for original in originals)
