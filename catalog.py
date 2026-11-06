@@ -1230,9 +1230,12 @@ def _lab7_assertions(text):
 
 def _lab7_policy_prose(text, required, nonaffirmative):
     """Ignore benign annotations and requirements explicitly outside the simulation."""
+    simulation = re.compile(r"\b(?:simulat\w*|training|scenario|exercise)\b")
+
     def qualifier(match):
         value = match[1]
         significant = (required.search(value) or nonaffirmative.search(value)
+                       or (re.match(r"(?:including|such as)\b", value) and simulation.search(value))
                        or re.search(_LAB7_APPROVAL, value)
                        or re.search(r"\b(?:not|no|never|only|except|subject|provided|b[ -]?\d+)\b", value))
         annotation = (re.match(r"(?:including|such as|(?:as\s+)?per|according to|under|see|reference)\b", value)
@@ -1270,7 +1273,9 @@ def _lab7_policy_prose(text, required, nonaffirmative):
 
     outside = re.compile(
         r"(?:^|(?<=[.!?;]))[ \t]*(?:(?:however|but|nevertheless),?[ \t]+)?"
-        r"(?:(?:in|for|under)[ \t]+(?:the[ \t]+)?real[ -]world\b|"
+        r"(?:(?:in|for|under)[ \t]+(?:(?:a|an|the)[ \t]+)?"
+        r"(?:real[ -]world\b|(?:live|real)[ \t]+"
+        r"(?:(?:operational[ \t]+)?environments?|(?:(?:panoptis|plant)[ \t]+)?operations)\b)|"
         r"outside[ \t]+(?:the|this)[ \t]+(?:simulation|training[ \t]+(?:scenario|exercise))\b)"
         r"(?P<body>[^.!?;\n]*)(?:[.!?;]|$)", re.M)
 
@@ -1278,7 +1283,7 @@ def _lab7_policy_prose(text, required, nonaffirmative):
         body = match["body"]
         # A mixed-scope statement or an explicit rejection still qualifies the
         # simulated directive and must remain visible to the negative checks.
-        if re.search(r"\b(?:simulat\w*|training|scenario|exercise)\b", body):
+        if simulation.search(body):
             return match[0]
         for objection in nonaffirmative.finditer(body):
             if not re.fullmatch(

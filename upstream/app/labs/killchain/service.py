@@ -7,11 +7,11 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.labs.killchain import agent, guardrails, memory, policy
+from app.labs.killchain import agent, boiler, guardrails, memory, policy
 from app.labs.killchain.constants import (
     ATTACKER_EMAIL,
     COUPON_PLACEHOLDER,
-    INVOICE_FIXTURE_NAME,
+    INSPECTION_FIXTURE_NAME,
     MODE_DEFENDED,
     MODES,
     PROCEDURE_LABELS,
@@ -100,7 +100,7 @@ async def hard_reset(db: AsyncSession, user_id: int) -> dict[str, Any]:
         detail={
             "restored": [
                 "products", "reviews", "tickets", "customers", "coupons", "connector memory",
-                "connector cache", "agent memory", "approvals", "attacker inbox", "checkouts", "trace",
+                "connector cache", "agent memory", "approvals", "attacker inbox", "checkouts", "trace", "capstone boiler simulator",
             ],
             "mode": state.mode, "universal_coupon": UNIVERSAL_COUPON,
         },
@@ -159,6 +159,7 @@ async def inbox(db: AsyncSession, user_id: int) -> list[dict[str, Any]]:
 
 async def snapshot(db: AsyncSession, user_id: int, *, event_limit: int = 300) -> dict[str, Any]:
     state = await ensure_baseline(db, user_id)
+    simulated_boiler = boiler.view(await boiler.get_state(db, user_id))
     products = await _all(db, KcProduct, user_id)
     by_id = {row.id: row for row in products}
     reviews = await _all(db, KcReview, user_id, KcReview.id.desc())
@@ -212,6 +213,7 @@ async def snapshot(db: AsyncSession, user_id: int, *, event_limit: int = 300) ->
         "lab_id": "killchain-1",
         "mode": state.mode,
         "epoch": state.epoch,
+        "boiler": simulated_boiler,
         "overall": overall,
         "status": {
             "connector_memory": len(connector),
@@ -288,7 +290,7 @@ def examples() -> dict[str, Any]:
         ],
         "coupon_placeholder": COUPON_PLACEHOLDER,
         "quick_actions": list(QUICK_ACTIONS),
-        "fixture": {"filename": INVOICE_FIXTURE_NAME, "url": "/api/killchain/fixtures/invoice.pdf"},
+        "fixture": {"filename": INSPECTION_FIXTURE_NAME, "url": "/api/killchain/fixtures/invoice.pdf"},
         "attacker_address": ATTACKER_EMAIL,
     }
 

@@ -6,7 +6,7 @@ from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.dependencies import get_current_admin
 from app.labs.killchain import agent, ingest, service
-from app.labs.killchain.constants import INVOICE_FIXTURE, INVOICE_FIXTURE_NAME, MAX_UPLOAD_BYTES
+from app.labs.killchain.constants import INSPECTION_FIXTURE, INSPECTION_FIXTURE_NAME, MAX_UPLOAD_BYTES
 from app.labs.killchain.pdf import PdfRejected, analyze_pdf, validate_upload
 from app.labs.killchain.seed import ensure_baseline
 from app.labs.killchain.trace import KillChainError, list_events
@@ -36,11 +36,13 @@ class ModeIn(BaseModel):
 
 
 class ReviewIn(BaseModel):
-    product: str = Field(min_length=1, max_length=120)
+    """Contractor feedback; legacy product/author keys still work for the current frontend."""
+
+    product: str = Field(min_length=1, max_length=120, validation_alias=AliasChoices("asset", "product"))
     rating: int = Field(ge=1, le=5)
     text: str = Field(min_length=1, max_length=2000)
     hidden: str = Field(default="", max_length=2000)
-    author: str = Field(default="", max_length=80)
+    author: str = Field(default="", max_length=80, validation_alias=AliasChoices("contractor", "author"))
 
 
 class TurnIn(BaseModel):
@@ -193,9 +195,9 @@ async def get_attachment_file(attachment_id: int, user: Admin, db: Db) -> Respon
 
 
 @router.get("/fixtures/invoice.pdf")
-async def get_invoice_fixture(user: Admin) -> Response:
-    """The repository's invoice fixture. It is the same file for every learner."""
-    return _download(INVOICE_FIXTURE.read_bytes(), INVOICE_FIXTURE_NAME)
+async def get_inspection_fixture(user: Admin) -> Response:
+    """The maintenance inspection fixture, served through the existing download URL."""
+    return _download(INSPECTION_FIXTURE.read_bytes(), INSPECTION_FIXTURE_NAME)
 
 
 @router.post("/turn")

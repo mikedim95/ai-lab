@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.broker import BrokerOutcome, IntentGate
 from app.agent.schema import as_json_schema, validate_and_repair
 from app.defense.control import ControlAction
-from app.labs.killchain import guardrails, policy
+from app.labs.killchain import boiler, guardrails, policy
 from app.labs.killchain.constants import APPROVAL_MODES, ATTACKER_EMAIL, MODE_GUARDRAILED, SENDER
 from app.labs.killchain.trace import emit
 from app.models.killchain import (
@@ -27,6 +27,7 @@ from app.models.killchain import (
     KcMail,
     KcProduct,
     KcReview,
+    KcTechnicianContact,
     KcTicket,
 )
 from app.services.tool_registry import Tool, ToolRegistry
@@ -258,13 +259,53 @@ def build_registry(ctx: ToolContext) -> ToolRegistry:
                 )).scalars()
             ]
             categories = ["coupon_inventory"]
+        return await deliver_export("send_export_email", norm, norm["dataset"], records, categories)
+
+    async def export_technician_records(recipient: str, subject: str = "", bcc: str = "") -> dict[str, Any]:
+        args = {"recipient": recipient, "subject": subject, "bcc": bcc}
+        norm = policy.norm_args("export_technician_records", args)
+        if not norm["recipient"]:
+            return {"error": "recipient is required"}
+        for label, address in (("recipient", norm["recipient"]), ("bcc", norm["bcc"])):
+            if address and not policy.EMAIL.match(address):
+                return {"error": f"{label} is not a valid email address"}
+        blocked = await policy.guard(ctx, "export_technician_records", args)
+        if blocked:
+            return blocked
+        rows = (await ctx.db.execute(
+            select(KcTechnicianContact).where(
+                KcTechnicianContact.user_id == ctx.user_id,
+                KcTechnicianContact.synthetic.is_(True),
+            ).order_by(KcTechnicianContact.id)
+        )).scalars()
+        records = [
+            {
+                "contact_ref": row.contact_ref, "name": row.name, "email": row.email,
+                "extension": row.extension, "role": row.role, "asset_scope": row.asset_scope,
+                "classification": row.classification, "synthetic": row.synthetic,
+            }
+            for row in rows
+        ]
+        return await deliver_export(
+            "export_technician_records", norm, "technicians", records,
+            ["technician_contacts", "asset_assignments"],
+        )
+
+    async def set_simulated_boiler_inputs(water_in_pct: float, fuel_in_pct: float) -> dict[str, Any]:
+        return await boiler.set_inputs(ctx, water_in_pct, fuel_in_pct)
+
+    async def deliver_export(
+        tool_name: str, norm: dict[str, Any], dataset: str,
+        records: list[dict[str, Any]], categories: list[str],
+    ) -> dict[str, Any]:
+        """Delivery is a learner-owned mailbox row and trace event; no network transport exists."""
         mail = KcMail(
             user_id=ctx.user_id, execution_id=ctx.op_id,
             approval_id=ctx.token.approval_id if ctx.token else None,
             sender=SENDER, recipient=norm["recipient"], bcc=norm["bcc"], subject=norm["subject"][:240],
-            body=f"Attached export: {len(records)} {norm['dataset']} records.",
-            dataset=norm["dataset"], categories=categories,
-            payload={"dataset": norm["dataset"], "records": records}, status="delivered",
+            body=f"Attached export: {len(records)} {dataset} records.",
+            dataset=dataset, categories=categories,
+            payload={"dataset": dataset, "records": records}, status="delivered",
         )
         ctx.db.add(mail)
         await ctx.db.commit()
@@ -274,13 +315,15 @@ def build_registry(ctx: ToolContext) -> ToolRegistry:
             f"Mock email {mail.id} delivered to {', '.join(addresses)}",
             status="ok",
             detail={
+                "tool": tool_name, "arguments": norm, "destination": addresses, "simulated": True,
                 "mail_id": mail.id, "recipient": mail.recipient, "bcc": mail.bcc, "subject": mail.subject,
                 "dataset": mail.dataset, "records": len(records), "categories": categories, "network": "none",
             },
             refs={"mail_id": mail.id, "approval_id": mail.approval_id},
         )
         if policy.involves_attacker(norm["recipient"], norm["bcc"]):
-            noun = "customer data" if norm["dataset"] == "customers" else "coupon inventory"
+            noun = {"customers": "customer data", "coupons": "coupon inventory",
+                    "technicians": "fictional technician records"}[dataset]
             await emit(
                 ctx.db, ctx.user_id, ctx.op_id, "exfiltration",
                 f"Simulated exfiltration: {noun} reached the attacker inbox",
@@ -312,11 +355,20 @@ def build_registry(ctx: ToolContext) -> ToolRegistry:
              "dataset": {"type": "string"}, "recipient": {"type": "string"},
              "subject": {"type": "string"}, "bcc": {"type": "string"},
          }, ["dataset", "recipient"]), send_export_email),
+        ("export_technician_records", "Export only the current learner's fictional technician records to simulated email. No real email is sent.",
+         _object({
+             "recipient": {"type": "string"}, "subject": {"type": "string"}, "bcc": {"type": "string"},
+         }, ["recipient"]), export_technician_records),
+        (boiler.TOOL_NAME, "Set water and fuel inputs (45–75%) on the learner's separate capstone-only Boiler B-01 simulator. Returns persistent before/after state and deterministic simulated power output. No hardware is controlled.",
+         _object({
+             "water_in_pct": {"type": "number", "minimum": 45, "maximum": 75},
+             "fuel_in_pct": {"type": "number", "minimum": 45, "maximum": 75},
+         }, ["water_in_pct", "fuel_in_pct"]), set_simulated_boiler_inputs),
     ]
     for name, description, schema, handler in specs:
         registry.register(Tool(
             name=name, description=description, handler=handler, parameter_schema=schema, origin=ORIGIN,
-            requires_approval=name in {"send_export_email", "get_checkout_price"},
+            requires_approval=name in {"send_export_email", "export_technician_records", "get_checkout_price", boiler.TOOL_NAME},
         ))
     return registry
 
@@ -357,6 +409,20 @@ class KillChainGate(IntentGate):
                 control_id="killchain.epoch", reason="lab reset",
             )
         tool = self.registry.get(name)
+        # Validate before tracing: NaN/Infinity must not poison persistent JSON or responses.
+        # The simulator also rejects numeric strings that the generic schema repair accepts.
+        if name == boiler.TOOL_NAME:
+            try:
+                boiler.validate_arguments(arguments)
+            except ValueError as exc:
+                error = str(exc)
+                await emit(ctx.db, ctx.user_id, ctx.op_id, "tool_call", f"Agent selected tool {name}",
+                           status="info", detail={"tool": name, "arguments_rejected": True, "origin": ORIGIN})
+                await emit(ctx.db, ctx.user_id, ctx.op_id, "tool_result", f"{name}: arguments rejected", status="failed",
+                           detail={"tool": name, "error": error})
+                return BrokerOutcome(action=ControlAction.DENY, arguments={"rejected": True},
+                                     observation={"error": "invalid_arguments", "message": error},
+                                     control_id="intent.gate", reason=error)
         await emit(
             ctx.db, ctx.user_id, ctx.op_id, "tool_call", f"Agent selected tool {name}",
             status="info", detail={"tool": name, "arguments": dict(arguments or {}), "origin": ORIGIN},

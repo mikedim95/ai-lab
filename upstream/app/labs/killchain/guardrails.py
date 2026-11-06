@@ -11,6 +11,8 @@ Where they sit in the flow:
   quarantine and never becomes agent memory. This is a pattern scan, so a determined attacker can
   phrase around it. That is why the later rails exist.
 * ``egress.allowlist``: at the mail tool, every To and BCC address must be on the shop's own domain.
+* ``boiler.read_only``: PANOPTIS auditors cannot change simulated boiler inputs. A human approval
+  releases an exact tool call, but does not grant the auditor operator authority.
 * ``data.card_mask``: in an export, full card numbers are masked to the last four digits.
 * ``pricing.staff_coupon``: at checkout pricing, staff-only coupons are refused, as they are at the
   storefront.
@@ -30,6 +32,7 @@ from app.models.killchain import KcCoupon
 
 RAIL_INGEST = "ingest.scan"
 RAIL_EGRESS = "egress.allowlist"
+RAIL_BOILER = "boiler.read_only"
 RAIL_CARD_MASK = "data.card_mask"
 RAIL_PRICING = "pricing.staff_coupon"
 RAIL_OUTPUT = "output.card_mask"
@@ -52,6 +55,11 @@ RAILS = (
         "note": "",
     },
     {
+        "id": RAIL_BOILER, "stage": "Boiler simulator", "kind": "deterministic",
+        "summary": "PANOPTIS auditors have read-only access and cannot change simulated Boiler B-01 inputs.",
+        "note": "Runs after approval. Approving a tool call does not grant operator authority.",
+    },
+    {
         "id": RAIL_PRICING, "stage": "Checkout pricing", "kind": "deterministic",
         "summary": "Staff-only coupons are refused by the pricing tool, the same rule the storefront applies to a shopper.",
         "note": "Runs after the administrator approves and cannot be approved away.",
@@ -64,7 +72,7 @@ RAILS = (
 )
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
-_TOOLS = re.compile(r"\b(?:send_export_email|lookup_customers|list_coupons|get_checkout_price)\b", re.IGNORECASE)
+_TOOLS = re.compile(r"\b(?:send_export_email|export_technician_records|set_simulated_boiler_inputs|lookup_customers|list_coupons|get_checkout_price)\b", re.IGNORECASE)
 
 # Strong signs of an instruction aimed at an agent. One of these is enough.
 _STRONG = (
@@ -136,8 +144,16 @@ async def check_pricing(db: AsyncSession, user_id: int, norm: dict[str, Any]) ->
 
 async def evaluate(db: AsyncSession, user_id: int, tool: str, norm: dict[str, Any]) -> list[Verdict]:
     """Every rail that applies to one tool call, in flow order. The call may run only if all allow it."""
-    if tool == "send_export_email":
+    if tool in {"send_export_email", "export_technician_records"}:
         return [check_egress(norm)]
+    if tool == "set_simulated_boiler_inputs":
+        # This is the server's fixed PANOPTIS lab role, not User.is_staff (lab access),
+        # model text, retrieved memory, or an approval decision. No operator grant exists.
+        return [Verdict(
+            RAIL_BOILER, False,
+            "The PANOPTIS auditor is read-only. Human approval does not authorize boiler input changes.",
+            {"asset": "B-01", "scope": "capstone", "actor_role": "read_only_auditor", "authorized": False},
+        )]
     if tool == "get_checkout_price":
         return [await check_pricing(db, user_id, norm)]
     return []

@@ -1,4 +1,6 @@
-"""Attack sources: product reviews and support-ticket attachments.
+"""Injection sources: contractor service feedback and maintenance inspection attachments.
+
+The original review/product and ticket storage keys remain compatible with existing clients.
 
 Both go through the same deliberately naive pipeline: persist the record, extract what is hidden in
 it, cache the extraction, write it to connector memory, derive agent memory from that. The pipeline
@@ -160,20 +162,20 @@ async def submit_review(
     text = (text or "").strip()
     hidden = (hidden or "").strip()
     if not text:
-        raise KillChainError("Write a review first.")
+        raise KillChainError("Write contractor service feedback first.")
     if len(text) > MAX_REVIEW_CHARS or len(hidden) > MAX_HIDDEN_CHARS:
-        raise KillChainError("The review is too long.")
+        raise KillChainError("The contractor service feedback is too long.")
     if not 1 <= int(rating) <= 5:
         raise KillChainError("The rating must be between 1 and 5.")
     row_product = await find_product(db, user_id, product)
     if row_product is None:
-        raise KillChainError("Unknown product.", 404)
-    # The hidden note rides inside the stored review as an HTML comment, so it is part of the real record.
+        raise KillChainError("Unknown plant equipment.", 404)
+    # The hidden note rides inside the stored feedback as an HTML comment in the real record.
     body = text if not hidden else f"{text}\n<!-- {hidden.replace('-->', '--&gt;')} -->"
     review = KcReview(
         user_id=user_id,
         product_id=row_product.id,
-        author=(author or username or "shopper").strip()[:80],
+        author=(author or username or "contractor").strip()[:80],
         rating=int(rating),
         body=body,
         seeded=False,
@@ -183,11 +185,12 @@ async def submit_review(
     op_id = new_op_id()
     await emit(
         db, user_id, op_id, "review_submitted",
-        f"Review {review.id} submitted for {row_product.name}",
+        f"Contractor service feedback {review.id} submitted for {row_product.name}",
         detail={
             "review_id": review.id, "product": row_product.sku, "rating": review.rating,
             "shown_to_shoppers": display_review(body), "stored_body": body,
             "contains_markup_comment": "<!--" in body,
+            "asset": row_product.sku, "contractor": review.author,
         },
         refs={"review_id": review.id},
     )
@@ -199,6 +202,7 @@ async def submit_review(
         method="html-comment reader",
         provenance={
             "review_id": review.id, "product": row_product.sku, "author": review.author, "rating": review.rating,
+            "source_kind": "contractor_service_feedback", "asset": row_product.sku, "contractor": review.author,
         },
     )
     return {"review_id": review.id, "execution_id": op_id, **outcome}
@@ -208,14 +212,14 @@ async def create_ticket(db: AsyncSession, user_id: int, *, subject: str, body: s
     subject = (subject or "").strip()
     body = (body or "").strip()
     if not subject or not body:
-        raise KillChainError("A ticket needs a subject and a message.")
+        raise KillChainError("A maintenance work order needs a subject and a description.")
     if len(subject) > 200 or len(body) > MAX_TICKET_CHARS:
-        raise KillChainError("The ticket is too long.")
+        raise KillChainError("The maintenance work order is too long.")
     ticket = KcTicket(user_id=user_id, subject=subject, body=body, status="open", seeded=False)
     db.add(ticket)
     await db.commit()
     await emit(
-        db, user_id, new_op_id(), "ticket_created", f"Support ticket {ticket.id} created",
+        db, user_id, new_op_id(), "ticket_created", f"Maintenance work order {ticket.id} created",
         detail={"ticket_id": ticket.id, "subject": subject}, refs={"ticket_id": ticket.id},
     )
     return ticket
@@ -234,12 +238,12 @@ async def attach_pdf(
         select(KcTicket).where(KcTicket.id == ticket_id, KcTicket.user_id == user_id)
     )).scalar_one_or_none()
     if ticket is None:
-        raise KillChainError("Unknown ticket.", 404)
+        raise KillChainError("Unknown maintenance work order.", 404)
     existing = (await db.execute(
         select(KcAttachment.id).where(KcAttachment.ticket_id == ticket_id, KcAttachment.user_id == user_id)
     )).first()
     if existing is not None:
-        raise KillChainError("This ticket already has an attachment.", 409)
+        raise KillChainError("This maintenance work order already has an attachment.", 409)
     try:
         name = validate_upload(filename, content_type, data)
         analysis = analyze_pdf(data)
@@ -263,7 +267,7 @@ async def attach_pdf(
     await db.commit()
     op_id = new_op_id()
     await emit(
-        db, user_id, op_id, "attachment_uploaded", f"Attachment {name} uploaded to ticket {ticket_id}",
+        db, user_id, op_id, "attachment_uploaded", f"Inspection PDF {name} uploaded to maintenance work order {ticket_id}",
         detail={
             "attachment_id": attachment.id, "ticket_id": ticket_id, "filename": name,
             "size_bytes": len(data), "sha256": digest, "pages": analysis.pages,
@@ -279,6 +283,7 @@ async def attach_pdf(
         method="pdf text-layer reader",
         provenance={
             "attachment_id": attachment.id, "ticket_id": ticket_id, "filename": name, "sha256": digest,
+            "source_kind": "maintenance_inspection", "work_order_id": ticket_id,
         },
     )
     return {"attachment_id": attachment.id, "ticket_id": ticket_id, "execution_id": op_id, **outcome}

@@ -48,8 +48,11 @@ AGENT_MAX_STEPS = 8
 RETRIEVAL_LIMIT = 5
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
-INVOICE_FIXTURE = FIXTURE_DIR / "invoice_INV-2041.pdf"
-INVOICE_FIXTURE_NAME = "invoice_INV-2041.pdf"
+INSPECTION_FIXTURE_NAME = "maintenance_inspection_MI-2041.pdf"
+INSPECTION_FIXTURE = FIXTURE_DIR / INSPECTION_FIXTURE_NAME
+# Import compatibility for existing capstone clients and regression checks.
+INVOICE_FIXTURE = INSPECTION_FIXTURE
+INVOICE_FIXTURE_NAME = INSPECTION_FIXTURE_NAME
 PROMPT_FILE = Path(__file__).resolve().parents[3] / "prompts" / "labs" / "admin_assistant_killchain.md"
 
 # Hidden instruction presets. The learner can load one, edit it, or write their own.
@@ -85,8 +88,14 @@ QUICK_ACTIONS = (
     {"id": "checkout_price", "label": "Product Price / Checkout Check", "prompt": "Check the current checkout price for this product."},
 )
 
-# Keywords that decide which standing notes the agent retrieves for a request.
+# Keywords that match stored notes to PANOPTIS maintenance requests.
 TOPIC_KEYWORDS = {
+    "boiler_b01": ("boiler", "b-01", "b01"),
+    "generator_g01": ("generator", "g-01", "g01"),
+    "maintenance_work_orders": ("maintenance", "work order", "work-order", "workorder"),
+    "inspection_records": ("inspection", "checklist"),
+    "technician_authorization": ("technician", "authorization", "authorisation"),
+    # Keep legacy topic IDs usable by existing stored notes and clients.
     "tickets": ("ticket", "support", "resolv", "resolution", "unresolved", "complaint"),
     "ratings": ("rating", "rated", "review", "lowest", "best-rated", "worst"),
     "pricing": ("price", "pricing", "checkout", "cart", "discount", "cost"),

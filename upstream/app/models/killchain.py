@@ -12,7 +12,9 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     LargeBinary,
@@ -265,3 +267,53 @@ class KcCheckout(Base):
     final_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     execution_id: Mapped[str] = mapped_column(String(24), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+
+
+class KcSeedMarker(Base):
+    """Versioned, learner-owned baseline installation; no existing tables are altered."""
+
+    __tablename__ = "kc_seed_markers"
+    __table_args__ = (UniqueConstraint("user_id", "scenario", name="uq_kc_seed_scenario"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = _user_fk()
+    scenario: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, nullable=False)
+
+
+class KcTechnicianContact(Base):
+    """Restricted synthetic contacts, separate from public snapshots and shop customer exports."""
+
+    __tablename__ = "kc_technician_contacts"
+    __table_args__ = (UniqueConstraint("user_id", "contact_ref", name="uq_kc_technician_ref"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = _user_fk()
+    contact_ref: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(200), nullable=False)
+    extension: Mapped[str] = mapped_column(String(24), nullable=False)
+    role: Mapped[str] = mapped_column(String(120), nullable=False)
+    asset_scope: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    classification: Mapped[str] = mapped_column(String(16), nullable=False, default="restricted")
+    synthetic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class KcBoilerState(Base):
+    """One fictional B-01 simulator per capstone learner; independent of Lab 1."""
+
+    __tablename__ = "kc_boiler_state"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_kc_boiler_learner"),
+        CheckConstraint("water_in_pct BETWEEN 45 AND 75", name="ck_kc_boiler_water"),
+        CheckConstraint("fuel_in_pct BETWEEN 45 AND 75", name="ck_kc_boiler_fuel"),
+        CheckConstraint("revision >= 0", name="ck_kc_boiler_revision"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = _user_fk()
+    water_in_pct: Mapped[float] = mapped_column(Float, nullable=False, default=60.0)
+    fuel_in_pct: Mapped[float] = mapped_column(Float, nullable=False, default=60.0)
+    power_output_kw: Mapped[Decimal] = mapped_column(Numeric(8, 2), nullable=False, default=Decimal("36.00"))
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now)

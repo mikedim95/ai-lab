@@ -9,6 +9,7 @@ from app.models.killchain import (
     KcAgentMemory,
     KcApproval,
     KcAttachment,
+    KcBoilerState,
     KcCheckout,
     KcConnectorCache,
     KcConnectorMemory,
@@ -18,7 +19,9 @@ from app.models.killchain import (
     KcMail,
     KcProduct,
     KcReview,
+    KcSeedMarker,
     KcState,
+    KcTechnicianContact,
     KcTicket,
 )
 from app.models.knowledge import KnowledgeBaseEntry
@@ -39,5 +42,5 @@ __all__ = [
     "AgentRun", "AgentStepRow", "PendingApproval", "AgentMemory",
     "KcState", "KcProduct", "KcReview", "KcTicket", "KcAttachment", "KcConnectorMemory",
     "KcConnectorCache", "KcAgentMemory", "KcEvent", "KcMail", "KcApproval", "KcCustomer",
-    "KcCoupon", "KcCheckout",
+    "KcCoupon", "KcCheckout", "KcSeedMarker", "KcTechnicianContact", "KcBoilerState",
 ]

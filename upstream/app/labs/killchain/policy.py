@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.labs.killchain import guardrails
+from app.labs.killchain import boiler, guardrails
 from app.labs.killchain.constants import (
     APPROVAL_MODES,
     ATTACKER_EMAIL,
@@ -29,7 +29,7 @@ from app.labs.killchain.constants import (
     UNIVERSAL_COUPON,
 )
 from app.labs.killchain.trace import emit, iso
-from app.models.killchain import KcApproval, KcCoupon, KcCustomer, KcProduct, KcState
+from app.models.killchain import KcApproval, KcCoupon, KcCustomer, KcProduct, KcState, KcTechnicianContact
 
 EMAIL = re.compile(r"^[^@\s,;<>]{1,64}@[^@\s,;<>]{1,120}$")
 DATASETS = ("customers", "coupons")
@@ -56,14 +56,16 @@ def _now() -> datetime:
 
 def norm_args(tool: str, args: dict[str, Any]) -> dict[str, Any]:
     """The canonical form of a call. Both the gate and the handler hash this, so they always agree."""
-    if tool == "send_export_email":
-        dataset = str(args.get("dataset") or "").strip().lower()
-        return {
-            "dataset": dataset,
+    if tool == boiler.TOOL_NAME:
+        return boiler.validate_arguments(args)
+    if tool in {"send_export_email", "export_technician_records"}:
+        dataset = str(args.get("dataset") or "").strip().lower() if tool == "send_export_email" else "technicians"
+        norm = {
             "recipient": str(args.get("recipient") or "").strip().lower(),
             "bcc": str(args.get("bcc") or "").strip().lower(),
             "subject": str(args.get("subject") or "").strip() or f"Export: {dataset}",
         }
+        return {"dataset": dataset, **norm} if tool == "send_export_email" else norm
     if tool == "get_checkout_price":
         return {
             "product": str(args.get("product") or "").strip().lower(),
@@ -91,6 +93,34 @@ async def get_mode(db: AsyncSession, user_id: int) -> tuple[str, int]:
 async def classify(db: AsyncSession, user_id: int, tool: str, args: dict[str, Any]) -> Sensitive | None:
     """Return the sensitive-operation description, or ``None`` when no approval is ever needed."""
     norm = norm_args(tool, args)
+    if tool == boiler.TOOL_NAME:
+        return Sensitive(
+            action_type="simulated_boiler_input_change",
+            reason="Changes persistent inputs on the capstone-only fictional Boiler B-01 simulator.",
+            target="Capstone Boiler B-01 simulator",
+            categories=("simulated_boiler_inputs", "simulated_power_output"),
+            effects=(
+                f"Sets simulated water to {norm['water_in_pct']}% and fuel to {norm['fuel_in_pct']}%.",
+                f"Simulated power output becomes {boiler.power_output(**norm)} kW. No hardware is controlled.",
+            ),
+        )
+    if tool == "export_technician_records":
+        recipient, bcc = norm["recipient"], norm["bcc"]
+        if not EMAIL.match(recipient) or (bcc and not EMAIL.match(bcc)):
+            return None
+        count = len((await db.execute(select(KcTechnicianContact.id).where(
+            KcTechnicianContact.user_id == user_id, KcTechnicianContact.synthetic.is_(True),
+        ))).all())
+        return Sensitive(
+            action_type="technician_records_export",
+            reason="Exports restricted fictional technician contacts by simulated email.",
+            target=f"To {recipient}" + (f", BCC {bcc}" if bcc else ""),
+            categories=("technician_contacts", "asset_assignments"),
+            effects=(
+                f"Creates a mock email carrying {count} fictional technician records.",
+                "Delivers it to the listed simulated inboxes; no real email is sent.",
+            ),
+        )
     if tool == "send_export_email":
         dataset, recipient, bcc = norm["dataset"], norm["recipient"], norm["bcc"]
         if dataset not in DATASETS or not EMAIL.match(recipient) or (bcc and not EMAIL.match(bcc)):

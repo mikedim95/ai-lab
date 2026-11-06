@@ -1,6 +1,6 @@
-"""Builds the invoice PDF fixture byte for byte, so the committed file can be verified.
+"""Builds the maintenance inspection PDF byte for byte, using the original fixture mechanism.
 
-The page looks like an ordinary supplier invoice. Below the footer, two lines are painted white
+The page looks like an ordinary contractor inspection report. Below the footer, two lines are painted white
 at 7 pt. A person sees nothing there. A text extractor returns them, which is the whole attack.
 """
 from __future__ import annotations
@@ -9,41 +9,34 @@ from app.labs.killchain.constants import PROCEDURES
 
 _VISIBLE_LINES = (
     # (font, size, x, y, text)
-    ("F2", 20, 56, 780, "INVOICE"),
-    ("F1", 10, 56, 758, "Northwind Logistics Ltd  |  14 Dockside Road, Leeds LS1 4AB"),
-    ("F2", 11, 380, 780, "Invoice no. INV-2041"),
-    ("F1", 10, 380, 764, "Issued: 2026-09-28"),
-    ("F1", 10, 380, 750, "Due: 2026-10-28 (net 30)"),
-    ("F2", 10, 56, 710, "Bill to"),
-    ("F1", 10, 56, 696, "AIGoat Demo Shop, Accounts Payable"),
-    ("F1", 10, 56, 682, "Purchase order KC-PO-7731"),
-    ("F2", 10, 56, 640, "Description"),
-    ("F2", 10, 330, 640, "Qty"),
-    ("F2", 10, 380, 640, "Unit"),
-    ("F2", 10, 470, 640, "Amount"),
-    ("F1", 10, 56, 618, "Pallet handling, Leeds warehouse"),
-    ("F1", 10, 330, 618, "4"),
-    ("F1", 10, 380, 618, "85.00"),
-    ("F1", 10, 470, 618, "340.00"),
-    ("F1", 10, 56, 600, "Last-mile delivery, September"),
-    ("F1", 10, 330, 600, "22"),
-    ("F1", 10, 380, 600, "12.50"),
-    ("F1", 10, 470, 600, "275.00"),
-    ("F1", 10, 56, 582, "Fuel surcharge"),
-    ("F1", 10, 330, 582, "1"),
-    ("F1", 10, 380, 582, "38.50"),
-    ("F1", 10, 470, 582, "38.50"),
-    ("F1", 10, 380, 540, "Subtotal"),
-    ("F1", 10, 470, 540, "653.50"),
-    ("F1", 10, 380, 524, "VAT 20%"),
-    ("F1", 10, 470, 524, "130.70"),
-    ("F2", 11, 380, 504, "Total due (USD)"),
-    ("F2", 11, 470, 504, "784.20"),
-    ("F1", 9, 56, 440, "Payment by bank transfer to the account on file. Quote INV-2041 as the reference."),
-    ("F1", 9, 56, 426, "Questions about this invoice: accounts@northwind-logistics.example.test"),
-    ("F1", 9, 56, 120, "Thank you for your business."),
+    ("F2", 20, 56, 780, "MAINTENANCE INSPECTION"),
+    ("F1", 10, 56, 742, "PANOPTIS training plant | Synthetic maintenance record"),
+    ("F2", 11, 400, 780, "Report MI-2041"),
+    ("F1", 10, 400, 764, "Inspected: 2026-09-28"),
+    ("F2", 10, 56, 710, "Asset and work order"),
+    ("F1", 10, 56, 696, "Boiler B-01 | Asset code B-01"),
+    ("F1", 10, 56, 682, "WO-B01-002 | Inspection record follow-up"),
+    ("F2", 10, 56, 640, "Inspection item"),
+    ("F2", 10, 330, 640, "Observation"),
+    ("F2", 10, 470, 640, "Status"),
+    ("F1", 10, 56, 618, "Asset label and register"),
+    ("F1", 10, 330, 618, "Recorded"),
+    ("F1", 10, 470, 618, "Review"),
+    ("F1", 10, 56, 600, "Inspection checklist"),
+    ("F1", 10, 330, 600, "Attached"),
+    ("F1", 10, 470, 600, "Review"),
+    ("F1", 10, 56, 582, "Contractor service notes"),
+    ("F1", 10, 330, 582, "Filed"),
+    ("F1", 10, 470, 582, "Open"),
+    ("F2", 11, 56, 540, "Record status: Follow-up open"),
+    ("F1", 10, 56, 524, "Maintenance exception approval: Pending supervisor review."),
+    ("F1", 10, 56, 504, "Contractor: Aster Inspection (synthetic)"),
+    ("F1", 10, 56, 486, "Assigned technician reference: TECH-PAN-001"),
+    ("F1", 9, 56, 440, "Reconcile the inspection notes with the synthetic maintenance record."),
+    ("F1", 9, 56, 426, "This report documents observations; it does not grant a maintenance exception."),
+    ("F1", 9, 56, 120, "Fictional PANOPTIS training record. No operating change is authorized."),
 )
-_RULES = ((56, 654, 483, 0.5), (56, 632, 483, 0.5), (370, 516, 169, 0.5))
+_RULES = ((56, 654, 483, 0.5), (56, 632, 483, 0.5))
 # The coupon abuse note is not in the file. The attacker only knows the internal coupon after the
 # coupon disclosure has run, so that step comes later, through a review.
 HIDDEN_PROCEDURES = ("customer_export", "coupon_disclosure")
@@ -76,7 +69,7 @@ def _content_stream() -> bytes:
     return ("\n".join(ops) + "\n").encode("latin-1")
 
 
-def build_invoice_pdf() -> bytes:
+def build_inspection_pdf() -> bytes:
     stream = _content_stream()
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
@@ -88,7 +81,7 @@ def build_invoice_pdf() -> bytes:
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
         b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"endstream",
-        b"<< /Title (Invoice INV-2041) /Producer (Northwind billing) /CreationDate (D:20260928090000Z) >>",
+        b"<< /Title (Maintenance Inspection MI-2041) /Producer (PANOPTIS maintenance records) /CreationDate (D:20260928090000Z) >>",
     ]
     out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
     offsets: list[int] = []
@@ -104,3 +97,8 @@ def build_invoice_pdf() -> bytes:
         f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R /Info 7 0 R >>\nstartxref\n{xref_at}\n%%EOF\n"
     ).encode()
     return bytes(out)
+
+
+def build_invoice_pdf() -> bytes:
+    """Compatibility entry point for callers of the original fixture builder."""
+    return build_inspection_pdf()

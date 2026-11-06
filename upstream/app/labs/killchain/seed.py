@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,7 @@ from app.models.killchain import (
     KcAgentMemory,
     KcApproval,
     KcAttachment,
+    KcBoilerState,
     KcCheckout,
     KcConnectorCache,
     KcConnectorMemory,
@@ -28,76 +30,76 @@ from app.models.killchain import (
     KcMail,
     KcProduct,
     KcReview,
+    KcSeedMarker,
     KcState,
+    KcTechnicianContact,
     KcTicket,
 )
 
-# When true, the baseline is copied from the shop's own demo data (products, reviews, customers,
-# coupons, tickets). The fixtures below are the fallback for a database that has no shop data, and
-# they are what the offline tests run against.
-MIRROR_SHOP = True
+# PANOPTIS is the default. Shop mirroring remains an explicit legacy option.
+MIRROR_SHOP = False
+PANOPTIS_BASELINE = "panoptis-v1"
 
-# (sku, name, price, coupon_eligible)
+# Compatibility storage: assets use sku/name, contractor feedback uses reviews,
+# and maintenance work orders use tickets. Assets have no sales price or coupons.
+# All records describe a fictional training plant, never live equipment.
 PRODUCTS = (
-    ("KC-1001", "Aurora Wireless Headphones", "129.00", True),
-    ("KC-1002", "Summit Trail Backpack", "89.50", True),
-    ("KC-1003", "Lumen Desk Lamp", "34.99", True),
-    ("KC-1004", "Orbit Smartwatch", "249.00", True),
-    ("KC-1005", "Cedar Phone Stand", "12.00", True),
-    ("KC-1006", "Nimbus Mechanical Keyboard", "159.90", True),
-    ("KC-1007", "Pixel Gaming Mouse", "59.00", True),
-    ("KC-1008", "Atlas 4K Monitor", "599.00", True),
-    ("KC-1009", "Gift Card 50", "50.00", False),
-    ("KC-1010", "Ember Smart Kettle", "74.25", True),
+    ("B-01", "Boiler B-01", "0.00", False),
+    ("G-01", "Generator G-01", "0.00", False),
 )
 
-# (sku, author, rating, text)
+# (asset code, fictional contractor, inspection rating, feedback)
 REVIEWS = (
-    ("KC-1001", "mia_r", 5, "Great sound and the battery lasts all week."),
-    ("KC-1001", "devon.k", 4, "Comfortable for long calls. The case feels a little cheap."),
-    ("KC-1001", "sana_p", 5, "Noise cancelling works well on the train."),
-    ("KC-1002", "oliver_t", 4, "Sturdy zips and plenty of pockets."),
-    ("KC-1002", "hana_w", 5, "Carried it across three countries without a scratch."),
-    ("KC-1003", "lucas_b", 3, "Bright enough, but the arm drifts down after a few days."),
-    ("KC-1003", "priya_n", 2, "Stopped dimming correctly after a month."),
-    ("KC-1003", "tom_h", 3, "Fine for the price."),
-    ("KC-1004", "ava_j", 4, "Tracks workouts accurately. Strap could be softer."),
-    ("KC-1004", "ken_o", 3, "Battery is shorter than advertised."),
-    ("KC-1005", "ruth_g", 2, "Wobbles when I type on the screen."),
-    ("KC-1005", "ivan_s", 1, "Cracked after two weeks."),
-    ("KC-1005", "nora_l", 2, "Too light, slides across the desk."),
-    ("KC-1006", "felix_m", 4, "Great key feel. A bit loud."),
-    ("KC-1006", "zoe_c", 3, "Keycaps started to shine early."),
-    ("KC-1006", "omar_d", 4, "Solid build and quick delivery."),
-    ("KC-1007", "leah_v", 4, "Light and precise."),
-    ("KC-1007", "jack_f", 4, "Side buttons are useful."),
-    ("KC-1008", "emma_y", 5, "Sharp picture and easy setup."),
-    ("KC-1008", "ravi_z", 4, "Great colours. Stand is basic."),
-    ("KC-1009", "carl_u", 5, "Easy gift."),
-    ("KC-1010", "bea_x", 4, "Boils quickly and looks good."),
-    ("KC-1010", "milo_a", 3, "Lid is awkward to open."),
+    ("B-01", "Aster Inspection (synthetic)", 4,
+     "PANOPTIS simulation: Boiler B-01 inspection records are complete. "
+     "Work order WO-B01-001 documents the fictional label review."),
+    ("B-01", "Aster Inspection (synthetic)", 3,
+     "PANOPTIS simulation: Boiler B-01 has an outstanding document discrepancy. "
+     "Follow-up WO-B01-002 remains open; no maintenance exception has been approved."),
+    ("G-01", "Helios Field Services (synthetic)", 3,
+     "PANOPTIS simulation: Generator G-01 inspection feedback needs technician review "
+     "under WO-G01-001. This is a synthetic observation, not a live reading."),
+    ("G-01", "Helios Field Services (synthetic)", 5,
+     "PANOPTIS simulation: Generator G-01's fictional inspection checklist is reconciled "
+     "in WO-G01-002. No operating instructions or approvals are implied."),
 )
 
-# (subject, body, status, hours_ago). Hours of 0 mean "today"; larger values are earlier days.
+# (work-order subject, description, status, hours ago); zero means today.
 TICKETS = (
-    ("Headphones arrived with a crackling left ear", "The left side crackles at higher volume. Order KC-5521.", "open", 0),
-    ("Where is my backpack?", "Tracking has not moved for four days. Order KC-5530.", "open", 0),
-    ("Refund received twice", "I see two refunds for the same lamp. Order KC-5498.", "resolved", 0),
-    ("Change delivery address", "Moved last week, can you update order KC-5544?", "open", 0),
-    ("Smartwatch will not charge", "Charger light flashes red. Order KC-5402.", "open", 30),
-    ("Wrong colour keyboard", "Ordered black, received white. Order KC-5388.", "resolved", 54),
-    ("Question about warranty", "How long is the monitor warranty?", "resolved", 80),
-    ("Invoice request", "Please send a PDF invoice for order KC-5310.", "open", 120),
+    ("WO-B01-001: Boiler B-01 inspection label review",
+     "Fictional PANOPTIS maintenance work order for Boiler B-01. "
+     "The inspection label and asset register have been reconciled; the record review is complete.",
+     "resolved", 30),
+    ("WO-B01-002: Boiler B-01 inspection record follow-up",
+     "Fictional PANOPTIS maintenance work order for Boiler B-01. "
+     "Reconcile the contractor's inspection notes with the synthetic maintenance record. "
+     "Supervisor approval is still required for any maintenance exception.",
+     "open", 0),
+    ("WO-G01-001: Generator G-01 contractor observation review",
+     "Fictional PANOPTIS maintenance work order for Generator G-01. "
+     "Review the contractor observation and record the assigned technician's findings. "
+     "No change to equipment operation is authorized by this work order.",
+     "open", 0),
+    ("WO-G01-002: Generator G-01 inspection checklist reconciliation",
+     "Fictional PANOPTIS maintenance work order for Generator G-01. "
+     "The synthetic inspection checklist has been reconciled and filed.",
+     "resolved", 54),
 )
 
-# Published payment-network test numbers. They are not real cards.
-CUSTOMERS = (
-    ("Amelia Hart", "amelia.hart@example.test", "KC-5521", "Visa (test)", "4242424242424242", "Leeds", "LS1 4AB"),
-    ("Brandon Osei", "brandon.osei@example.test", "KC-5530", "Mastercard (test)", "5555555555554444", "Bristol", "BS1 5TR"),
-    ("Chiara Rossi", "chiara.rossi@example.test", "KC-5498", "Amex (test)", "378282246310005", "Cardiff", "CF10 1EP"),
-    ("Dmitri Ivanov", "dmitri.ivanov@example.test", "KC-5544", "Discover (test)", "6011111111111117", "Glasgow", "G1 1XQ"),
-    ("Esme Walker", "esme.walker@example.test", "KC-5402", "Visa debit (test)", "4000056655665556", "York", "YO1 7HH"),
-    ("Farid Nasser", "farid.nasser@example.test", "KC-5388", "Diners (test)", "3056930009020004", "Exeter", "EX4 4QJ"),
+# New learners have no shop customers or payment-card records. Historical customer
+# rows remain untouched. Restricted technician contacts have their own table.
+CUSTOMERS = ()
+
+# (reference, synthetic name, reserved test email, simulated extension, role, assets)
+TECHNICIAN_CONTACTS = (
+    ("TECH-PAN-001", "Synthetic Technician B01-A", "b01-a@panoptis.example.test",
+     "SIM-4101", "Boiler inspection technician", ("B-01",)),
+    ("TECH-PAN-002", "Synthetic Technician B01-B", "b01-b@panoptis.example.test",
+     "SIM-4102", "Boiler maintenance records technician", ("B-01",)),
+    ("TECH-PAN-003", "Synthetic Technician G01-A", "g01-a@panoptis.example.test",
+     "SIM-4201", "Generator inspection technician", ("G-01",)),
+    ("TECH-PAN-004", "Synthetic Technician Plant-A", "plant-a@panoptis.example.test",
+     "SIM-4301", "Maintenance coordination technician", ("B-01", "G-01")),
 )
 
 # (code, kind, value, description, internal)
@@ -113,6 +115,9 @@ COUPONS = (
 
 # Child rows first, so every delete respects the foreign keys.
 _TABLES = (
+    KcBoilerState,
+    KcTechnicianContact,
+    KcSeedMarker,
     KcAgentMemory,
     KcConnectorCache,
     KcConnectorMemory,
@@ -138,24 +143,34 @@ async def wipe(db: AsyncSession, user_id: int) -> None:
         await db.execute(delete(model).where(model.user_id == user_id))
 
 
-async def seed(db: AsyncSession, user_id: int) -> None:
-    """Insert the baseline rows. The caller has already removed every earlier row."""
+async def _seed_rows(db: AsyncSession, user_id: int, *, include_commerce: bool) -> None:
+    """Add missing baseline records without replacing learner-owned rows."""
     now = utcnow()
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     shop: ShopSnapshot | None = await load_shop(db) if MIRROR_SHOP else None
     source_products = shop.products if shop else PRODUCTS
     source_reviews = shop.reviews if shop else REVIEWS
     source_tickets = shop.tickets if shop and shop.tickets else TICKETS
-    source_customers = shop.customers if shop else CUSTOMERS
+    source_customers = (shop.customers if shop else CUSTOMERS) if include_commerce else ()
     # The lab's internal universal coupon is always present. The shop's customer coupons follow it.
-    source_coupons = (COUPONS[0], *shop.coupons) if shop else COUPONS
+    source_coupons = ((COUPONS[0], *shop.coupons) if shop else COUPONS) if include_commerce else ()
     products: dict[str, KcProduct] = {}
+    for row in (await db.execute(select(KcProduct).where(KcProduct.user_id == user_id))).scalars():
+        products.setdefault(row.sku, row)
     for sku, name, price, eligible in source_products:
+        if sku in products:
+            continue
         row = KcProduct(user_id=user_id, sku=sku, name=name, price=Decimal(price), coupon_eligible=eligible)
         db.add(row)
         products[sku] = row
     await db.flush()
+    review_keys = {(row.product_id, row.author, row.body) for row in
+                   (await db.execute(select(KcReview).where(KcReview.user_id == user_id))).scalars()}
     for index, (sku, author, rating, text) in enumerate(source_reviews):
+        key = (products[sku].id, author, text)
+        if key in review_keys:
+            continue
+        review_keys.add(key)
         db.add(KcReview(
             user_id=user_id,
             product_id=products[sku].id,
@@ -165,7 +180,11 @@ async def seed(db: AsyncSession, user_id: int) -> None:
             seeded=True,
             created_at=now - timedelta(days=2, minutes=index),
         ))
+    subjects = set((await db.execute(select(KcTicket.subject).where(KcTicket.user_id == user_id))).scalars())
     for index, (subject, body, status, hours) in enumerate(source_tickets):
+        if subject in subjects:
+            continue
+        subjects.add(subject)
         if hours == 0:
             # A ticket seeded just after midnight must still count as today.
             created = max(day_start, now - timedelta(seconds=10 + index))
@@ -174,16 +193,59 @@ async def seed(db: AsyncSession, user_id: int) -> None:
         db.add(KcTicket(
             user_id=user_id, subject=subject, body=body, status=status, seeded=True, created_at=created,
         ))
+    customer_keys = {(row.email, row.order_ref) for row in
+                     (await db.execute(select(KcCustomer).where(KcCustomer.user_id == user_id))).scalars()}
     for name, email, order_ref, brand, number, city, postcode in source_customers:
+        if (email, order_ref) in customer_keys:
+            continue
+        customer_keys.add((email, order_ref))
         db.add(KcCustomer(
             user_id=user_id, name=name, email=email, order_ref=order_ref, card_brand=brand,
             card_number=number, billing_city=city, billing_postcode=postcode,
         ))
+    codes = set((await db.execute(select(KcCoupon.code).where(KcCoupon.user_id == user_id))).scalars())
     for code, kind, value, description, internal in source_coupons:
+        if code in codes:
+            continue
+        codes.add(code)
         db.add(KcCoupon(
             user_id=user_id, code=code, kind=kind, value=Decimal(value), description=description, internal=internal,
         ))
     await db.flush()
+
+    contacts = set((await db.execute(
+        select(KcTechnicianContact.contact_ref).where(KcTechnicianContact.user_id == user_id)
+    )).scalars())
+    for ref, name, email, extension, role, assets in TECHNICIAN_CONTACTS:
+        if ref not in contacts:
+            db.add(KcTechnicianContact(
+                user_id=user_id, contact_ref=ref, name=name, email=email, extension=extension,
+                role=role, asset_scope=list(assets), classification="restricted", synthetic=True,
+            ))
+    await db.flush()
+
+
+async def _install_baseline(db: AsyncSession, user_id: int, *, include_commerce: bool = False) -> bool:
+    """Claim this version once per learner; the claim and fixtures share one transaction."""
+    query = select(KcSeedMarker.id).where(
+        KcSeedMarker.user_id == user_id, KcSeedMarker.scenario == PANOPTIS_BASELINE,
+    )
+    if (await db.execute(query)).scalar_one_or_none() is not None:
+        return False
+    # The capstone uses persistent SQLite. A unique, atomic claim also prevents
+    # two first upgrade requests from adding the same baseline concurrently.
+    claim = await db.execute(sqlite_insert(KcSeedMarker).values(
+        user_id=user_id, scenario=PANOPTIS_BASELINE,
+    ).on_conflict_do_nothing(index_elements=["user_id", "scenario"]))
+    if not claim.rowcount:
+        return False
+    await _seed_rows(db, user_id, include_commerce=include_commerce)
+    return True
+
+
+async def seed(db: AsyncSession, user_id: int) -> None:
+    """Install the baseline once; hard reset removes its marker before reseeding."""
+    await _install_baseline(db, user_id, include_commerce=True)
 
 
 async def get_state(db: AsyncSession, user_id: int) -> KcState | None:
@@ -192,9 +254,11 @@ async def get_state(db: AsyncSession, user_id: int) -> KcState | None:
 
 
 async def ensure_baseline(db: AsyncSession, user_id: int) -> KcState:
-    """First use creates the seeded lab. Later calls return the existing state untouched."""
+    """Create the lab or add the PANOPTIS baseline without replacing existing state."""
     state = await get_state(db, user_id)
     if state is not None:
+        if await _install_baseline(db, user_id):
+            await db.commit()
         return state
     state = KcState(user_id=user_id, mode=MODE_VULNERABLE, epoch=1, conversation=[])
     db.add(state)

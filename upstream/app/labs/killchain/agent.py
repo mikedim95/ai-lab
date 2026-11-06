@@ -36,7 +36,7 @@ from app.services.ollama_client import get_llm_client
 MODEL_NAME = re.compile(r"^[A-Za-z0-9._:/\-]{1,80}$")
 MAX_RUNS_KEPT = 30
 MAX_CONVERSATION = 24
-IMPACT_KINDS = ("approval_required", "exfiltration", "coupon_abuse", "mail_delivered", "guardrail")
+IMPACT_KINDS = ("approval_required", "exfiltration", "coupon_abuse", "mail_delivered", "guardrail", "boiler_inputs_updated")
 
 
 @dataclass

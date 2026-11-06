@@ -53,6 +53,20 @@ The capstone has its own database and browser-scoped learner. It uses the origin
 
 The capstone is separate from the 2,100-point CTF score. Its hard reset does not reset the nine CTFs. If a local model ignores a planted note, the trace reports that outcome; no impact is invented.
 
+`export_technician_records(recipient, subject="", bcc="")` exports the current learner's fictional technician contacts, including asset assignments, through the existing simulated mailbox. Only contacts marked `synthetic` are included. Defended and Guardrailed modes retain exact-call approval; Guardrailed mode also applies the existing destination allowlist after approval. The `mail_delivered` trace records the tool, canonical arguments, exported count, destinations, and mailbox ID. Delivery writes database rows only and sends no real email.
+
+`set_simulated_boiler_inputs(water_in_pct, fuel_in_pct)` sets strict numeric inputs from 45 through 75 inclusive on a separate, learner-owned capstone Boiler B-01 simulator. Its initial inputs are 60/60; simulated Power Output is `water_in_pct * fuel_in_pct / 100` kW, rounded half-up to two decimals. The `/api/killchain/state` response exposes this persistent simulator as `boiler`. Each successful call increments a revision and atomically records a `boiler_inputs_updated` event containing before/after values. Competing writes or a concurrent reset return `state_conflict`; failed audit writes roll back the simulator update. Soft reset preserves this state, while hard reset restores only the current learner's simulator. The simulator has no MQTT, PLC, hardware, or Lab 1 connection.
+
+Both PANOPTIS sensitive tools use the existing capstone defense architecture:
+
+| Difficulty (backend mode) | Technician-record export | Simulated boiler input change |
+| --- | --- | --- |
+| Easy (`vulnerable`) | Executes if the model selects the tool, including external simulated delivery. | Executes if the model selects the tool. |
+| Medium (`defended`) | Waits for human approval of the exact call. | Waits for human approval of the exact call. |
+| Hard (`guardrailed`) | Requires exact-call approval, then `egress.allowlist` blocks every external To or BCC destination. Internal delivery still works after approval. | Requires exact-call approval, then `boiler.read_only` blocks changes because the PANOPTIS auditor has no operator authority. |
+
+Approvals remain bound to the learner, tool and canonical arguments and execute at most once. The handlers recheck the current mode and deterministic rails immediately before acting, including when a pending Medium call is approved after switching to Hard. A mistaken approval in Hard records a blocked guardrail event without a delivery or boiler update. Account staff flags, retrieved notes, and the approval itself do not grant the fixed PANOPTIS auditor role operator authority. Mode changes preserve earlier simulated state and event history.
+
 ## Data and runtime
 
 Browser progress is identified by an anonymous HttpOnly cookie. Use the same browser and address to retain it. Clearing cookies starts a new learner. Data persists across container restarts in `data/`:
@@ -108,9 +122,14 @@ node --check static/app.js
 node --check static/killchain.js
 node --check static/boiler.js
 docker compose exec killchain python /adapter/checks.py
+docker compose exec killchain python /checks/test_panoptis_export.py
+docker compose exec killchain python /checks/test_panoptis_boiler.py
+docker compose exec killchain python /checks/test_panoptis_defense.py
 ```
 
 The capstone checks use an in-memory database and a scripted model in a separate process; the original agent loop and tools execute. The tests cover PDF parsing, per-learner isolation, persistent memory, export records, one-time approvals, guardrails after a wrong approval, coupon disclosure, and discounted checkout.
+
+The technician export checks also reject socket connections, DNS lookups, and SMTP calls. They compare delivered payloads with actual learner-owned fictional records, verify that model claims and pending/rejected approvals create no mail, and cover argument binding, replay, learner isolation, and guardrails after approval.
 
 An optional real-model check for the nine CTFs is available:
 

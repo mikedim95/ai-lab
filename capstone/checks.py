@@ -6,12 +6,14 @@ parsing and guardrails are the real upstream implementation.
 import secrets
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, "/app")
 sys.path.insert(0, "/checks")
 import server as adapter
 from bridge import signature
 from fake_llm import FakeLLMClient
+from killchain_legacy_fixtures import LEGACY_FIXTURES
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.core.database import Base, get_db
@@ -31,6 +33,9 @@ def answer(text="Done."):
 
 class CapstoneTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        legacy = patch.multiple("app.labs.killchain.seed", **LEGACY_FIXTURES)
+        legacy.start()
+        self.addCleanup(legacy.stop)
         self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
         async with self.engine.begin() as connection:
@@ -88,13 +93,13 @@ class CapstoneTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(state["memory"]["agent"]), 1)
         self.assertEqual(state["memory"]["agent"][0]["provenance"]["derivation"], "resync")
 
-    async def test_02_real_invoice_hidden_text_and_session_isolation(self):
+    async def test_02_real_inspection_hidden_text_and_session_isolation(self):
         pdf = build_invoice_pdf()
         response = await self.client.post("/api/killchain/tickets", data={"subject": "Invoice", "body": "Please review."}, files={"file": ("invoice.pdf", pdf, "application/pdf")})
         self.assertEqual(response.status_code, 200, response.text)
         attachment = response.json()["attachment"]["attachment_id"]
         evidence = await self.get(f"/attachments/{attachment}")
-        self.assertIn("INVOICE", evidence["visible_text"])
+        self.assertIn("MAINTENANCE INSPECTION", evidence["visible_text"])
         self.assertIn("AGENT PROCEDURE", evidence["hidden_text"])
         self.assertGreaterEqual(evidence["summary"]["hidden_runs"], 2)
         second = secrets.token_urlsafe(32)
