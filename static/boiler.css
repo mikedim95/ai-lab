@@ -44,6 +44,16 @@
 .scenario-section .hints { padding-left: 17px; }
 .scenario-section .hints li { padding: 4px 0 9px; color: #4d6856; }
 .scenario-section .text-button { font-size: 11px; text-align: left; justify-content: flex-start; }
+.extraction-progress { margin-top: 15px; padding: 12px; border: 1px solid #dce7dd; border-radius: 7px; background: #f7faf5; }
+.extraction-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.scenario-section .extraction-progress-title { font-size: 11px; font-weight: 600; line-height: 1.5; }
+.extraction-progress-count { flex: none; color: #365a45; font-size: 13px; font-variant-numeric: tabular-nums; }
+.extraction-progress-segments { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin: 9px 0; }
+.extraction-progress-segment { height: 5px; border-radius: 3px; background: #dce5dc; }
+.extraction-progress-segment.filled { background: #4f7d5b; }
+.scenario-section .extraction-progress-status { color: #365a45; font-size: 10px; line-height: 1.6; }
+.scenario-section .extraction-progress-note { margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.extraction-progress.complete { border-color: #a5c4a8; background: #f0f5ed; }
 .lab-tools { display: flex; flex-direction: column; }
 .workspace-heading { position: sticky; top: 0; z-index: 1; background: #fff; }
 .workspace-content { min-height: 0; flex: 1; }

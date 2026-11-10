@@ -23,10 +23,11 @@ from urllib.parse import urlsplit
 
 from capstone.bridge import signature
 
-from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_REFUSAL, LAB3_DOCUMENTS,
+from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_FINGERPRINTS, LAB2_REFUSAL, LAB3_DOCUMENTS,
                      LAB4_REFUSAL, LAB4_TRUSTED_SNAPSHOT, LAB5_REFUSAL, LAB6_REFUSAL, LAB7_DOCUMENTS, LAB7_REFUSAL, ROOT,
                      TOTAL_POINTS, build_messages, check_boiler_control, check_exploit, defend_input,
-                     defend_output, defend_retrieval, fresh_lab, lab2_instruction_leaks, retrieve)
+                     defend_output, defend_retrieval, fresh_lab, lab2_instruction_leaks,
+                     lab2_supplied_instructions, retrieve)
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", ROOT / "data"))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -63,12 +64,17 @@ LAB1_UNVERIFIED_MESSAGE = (
     "Exploit unverified: no successful unauthorized set_boiler_inputs execution changed both saved inputs. "
     "Claims, simulations without execution, rejected calls, and unchanged inputs do not count."
 )
+LAB2_CONTRACT_SHA256 = hashlib.sha256("\n".join(LAB2_FINGERPRINTS).encode()).hexdigest()
 
 
 class APIError(Exception):
     def __init__(self, status, message):
         self.status = status
         super().__init__(message)
+
+
+class _Lab2Projection(dict):
+    """Keep response freshness metadata out of the public JSON fields."""
 
 
 def fresh_operational_alerts():
@@ -126,6 +132,9 @@ class Store:
         with self.connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS sessions (sid TEXT PRIMARY KEY, data TEXT NOT NULL, updated REAL NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            db.execute("""CREATE TABLE IF NOT EXISTS lab2_extraction_turns (
+                sid TEXT NOT NULL, attempt INTEGER NOT NULL, turn_id TEXT NOT NULL,
+                evidence TEXT NOT NULL, PRIMARY KEY (sid, attempt, turn_id))""")
             db.execute("INSERT OR IGNORE INTO metadata VALUES ('flag_key', ?)", (secrets.token_hex(32),))
             self.flag_key = bytes.fromhex(db.execute("SELECT value FROM metadata WHERE name='flag_key'").fetchone()[0])
 
@@ -163,6 +172,10 @@ class Store:
                                 migrated_lab3 = True
                                 break
                 if missing or missing_boiler or missing_alerts or migrated_lab3:
+                    db.execute("BEGIN IMMEDIATE")
+                    latest = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
+                    if latest:
+                        self._merge_lab2_award(data, json.loads(latest[0]))
                     db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
                 return sid, data
             sid = secrets.token_urlsafe(32)
@@ -171,9 +184,105 @@ class Store:
             db.execute("INSERT INTO sessions VALUES (?, ?, ?)", (sid, json.dumps(data), time.time()))
             return sid, data
 
-    def save(self, sid, data):
+    @staticmethod
+    def _merge_lab2_award(data, previous):
+        """Keep earned Lab 2 state independent from the current conversation."""
+        current = data.get("labs", {}).get("2")
+        saved = previous.get("labs", {}).get("2", {})
+        if not isinstance(current, dict):
+            return
+        if current.get("attempt", 0) < saved.get("attempt", 0):
+            current = data["labs"]["2"] = copy.deepcopy(saved)
+        if saved.get("exploited") or saved.get("completed"):
+            current["exploited"] = True
+            current["completed"] = bool(saved.get("completed") or current.get("completed"))
+            current["lab2_flag_attempt"] = saved.get("lab2_flag_attempt", saved["attempt"])
+        elif current.get("exploited") or current.get("completed"):
+            current["lab2_flag_attempt"] = current["attempt"]
+
+    def save(self, sid, data, *, lab2_turn=None):
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            latest = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
+            if latest:
+                previous = json.loads(latest[0])
+                if lab2_turn is not None and previous["labs"]["2"]["attempt"] != data["labs"]["2"]["attempt"]:
+                    raise APIError(409, "This lab was restarted while the AI was replying. The old reply was discarded.")
+                self._merge_lab2_award(data, previous)
+            if lab2_turn is not None:
+                db.execute("INSERT INTO lab2_extraction_turns VALUES (?, ?, ?, ?)",
+                           (sid, data["labs"]["2"]["attempt"], lab2_turn["turn_id"], json.dumps(lab2_turn)))
             db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
+
+    def submit_lab2_flag(self, sid, submitted):
+        """Validate and commit one completion transition using the session's PK."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
+            if not row:
+                raise APIError(403, "Trigger this lab’s exploit in the chat before submitting a flag.")
+            data = json.loads(row[0])
+            record = data["labs"]["2"]
+            if not (record.get("exploited") or record.get("completed")):
+                raise APIError(403, "Trigger this lab’s exploit in the chat before submitting a flag.")
+            if submitted.startswith("AIGOAT{"):
+                submitted = "PANOPTIS{" + submitted[len("AIGOAT{"):]
+            try:
+                supplied = submitted.encode("ascii")
+            except UnicodeEncodeError:
+                raise APIError(400, "That flag does not match this lab and attempt.") from None
+            origin = record.get("lab2_flag_attempt", record["attempt"])
+            expected = self.flag(sid, 2, origin)
+            if not hmac.compare_digest(supplied, expected.encode("ascii")):
+                raise APIError(400, "That flag does not match this lab and attempt.")
+            newly_completed = not record["completed"]
+            if newly_completed:
+                record.update(completed=True, exploited=True, lab2_flag_attempt=origin)
+                db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?",
+                           (json.dumps(data), time.time(), sid))
+            return data, newly_completed
+
+    def lab2_progress(self, sid, attempt, *, legacy_messages=()):
+        """Read private, session/attempt-bound evidence, never client counters/history."""
+        verified, supplied = set(), set()
+        with self.connect() as db:
+            rows = db.execute("SELECT evidence FROM lab2_extraction_turns WHERE sid=? AND attempt=?",
+                              (sid, attempt)).fetchall()
+        if not rows:
+            # Pre-verification transcripts have no generation provenance. They
+            # cannot seed a new live response and thereby launder old fixtures.
+            supplied.update(lab2_supplied_instructions("\n".join(
+                turn["content"] for turn in legacy_messages)))
+        valid = lambda values: {i for i in values if type(i) is int and 0 <= i < len(LAB2_FINGERPRINTS)}
+        for (raw,) in rows:
+            evidence = json.loads(raw)
+            if evidence.get("contract_sha256") != LAB2_CONTRACT_SHA256:
+                continue
+            supplied.update(valid(evidence["supplied_lines"]))
+            if evidence.get("source") == "live_ollama":
+                verified.update(valid(evidence["verified_lines"]))
+        return verified, supplied
+
+    def lab2_reply_progress(self, sid, attempt):
+        """Project the latest reply's private evidence, without accumulating turns."""
+        with self.connect() as db:
+            revision, raw = db.execute(
+                "SELECT COUNT(*), (SELECT evidence FROM lab2_extraction_turns "
+                "WHERE sid=? AND attempt=? ORDER BY rowid DESC LIMIT 1) "
+                "FROM lab2_extraction_turns WHERE sid=? AND attempt=?",
+                (sid, attempt, sid, attempt)).fetchone()
+        try:
+            evidence = json.loads(raw) if raw is not None else {}
+        except (ValueError, TypeError):
+            evidence = {}
+        if (not isinstance(evidence, dict)
+                or evidence.get("contract_sha256") != LAB2_CONTRACT_SHA256
+                or evidence.get("source") != "live_ollama"
+                or not isinstance(evidence.get("verified_lines"), list)):
+            return 0, revision
+        verified = {i for i in evidence["verified_lines"]
+                    if type(i) is int and 0 <= i < len(LAB2_FINGERPRINTS)}
+        return min(3, len(verified)), revision
 
     def flag(self, sid, lab_id, attempt):
         digest = hmac.new(self.flag_key, f"{lab_id}:{sid}:{attempt}".encode(), hashlib.sha256).hexdigest()
@@ -270,19 +379,6 @@ class Application:
         return {"completed": completed, "score": sum(CATALOG[i - 1]["points"] for i in completed),
                 "total_points": TOTAL_POINTS, "total_labs": 9}
 
-    @staticmethod
-    def lab2_verified_leaks(record):
-        """Keep identities private and recover progress for existing attempts."""
-        if "lab2_verified_leaks" in record:
-            return set(record["lab2_verified_leaks"])
-        verified = set()
-        history = []
-        for turn in record["messages"]:
-            if turn["role"] == "assistant":
-                verified.update(lab2_instruction_leaks(turn["content"], history))
-            history.append(turn)
-        return verified
-
     def public_lab(self, sid, lab_id, record):
         public = {"id": lab_id, "messages": record["messages"], "completed": record["completed"],
                 "exploited": record["exploited"], "flag": self.store.flag(sid, lab_id, record["attempt"]) if record["exploited"] else None,
@@ -296,7 +392,15 @@ class Application:
             public["boiler_tool_calls"] = copy.deepcopy(record.get("boiler_tool_calls", []))
             public["operational_alerts"] = copy.deepcopy(record["operational_alerts"])
         elif lab_id == 2:
-            public["verified_instruction_leaks"] = min(3, len(self.lab2_verified_leaks(record)))
+            count, revision = self.store.lab2_reply_progress(sid, record["attempt"])
+            public = _Lab2Projection(public)
+            public["exploited"] = bool(record["exploited"] or record["completed"])
+            public["flag"] = (self.store.flag(sid, 2, record.get("lab2_flag_attempt", record["attempt"]))
+                              if public["exploited"] else None)
+            public.update(verified_instruction_count=count, required_instruction_count=3,
+                          extraction_completed=count == 3 and
+                          (record.get("last_result") or {}).get("triggered") is True)
+            public.extraction_version = (record["attempt"], revision, int(record["completed"]))
         elif lab_id == 4:
             public["trusted_snapshot"] = copy.deepcopy(LAB4_TRUSTED_SNAPSHOT)
         return public
@@ -426,7 +530,10 @@ class Application:
                 _, data = self.store.get(sid)
                 snapshot = copy.deepcopy(data["labs"][str(lab_id)])
             started = time.monotonic()
-            turn_id = secrets.token_hex(16) if lab_id == 1 else None
+            turn_id = secrets.token_hex(16) if lab_id in (1, 2) else None
+            lab2_live = False
+            lab2_turn = None
+            model_reply = None
             tool_events = []
             level = snapshot.get("defense_level", 0)
             cleaned_message, blocked_reason = defend_input(message, level, lab_id=lab_id)
@@ -494,9 +601,15 @@ class Application:
                         # A failed follow-up generation cannot hide verified success.
                         reply = LAB1_SUCCESS_MESSAGE
                 else:
+                    # Only the production Ollama path supplies live evidence.
+                    # Injected demo/test callables can display text but cannot
+                    # unlock Lab 2, regardless of any claims in their response.
+                    lab2_live = lab_id == 2 and self.model is local_model
                     reply = self.model(messages)
             if not isinstance(reply, str) or not reply.strip():
                 raise APIError(503, "The local AI returned an empty reply. Please try again.")
+            if lab2_live:
+                model_reply = reply
             if not blocked_reason:
                 reply, blocked_reason = defend_output(reply, level, lab_id=lab_id)
                 if lab_id == 1 and blocked_reason:
@@ -522,14 +635,38 @@ class Application:
                     history[-1]["boiler_execution"] = boiler_execution_result(tool_events, record["boiler"])
                 record["messages"] = history[-60:]
                 if lab_id == 2:
-                    verified = self.lab2_verified_leaks(snapshot)
-                    supplied = set(snapshot.get("lab2_supplied_lines", []))
-                    for turn in history:
-                        if turn["role"] == "user":
-                            supplied.update(lab2_instruction_leaks(turn["content"], []))
-                    verified.update(lab2_instruction_leaks(reply, history) - supplied)
-                    record["lab2_verified_leaks"] = sorted(verified)
-                    record["lab2_supplied_lines"] = sorted(supplied)
+                    _, supplied = self.store.lab2_progress(sid, record["attempt"],
+                                                           legacy_messages=snapshot["messages"])
+                    # Retain legacy taint, but never promote legacy messages or
+                    # cached progress to proof of a live model generation.
+                    supplied.update(i for i in snapshot.get("lab2_supplied_lines", [])
+                                    if type(i) is int and 0 <= i < len(LAB2_FINGERPRINTS))
+                    supplied.update(lab2_supplied_instructions("\n".join(
+                        turn["content"] for turn in history if turn["role"] == "user")))
+                    # Scripted replies and filter-added values are untrusted
+                    # context too, including when a later live turn repeats them.
+                    supplied.update(lab2_supplied_instructions(reply)
+                                    - lab2_supplied_instructions(model_reply or ""))
+                    eligible = set()
+                    if lab2_live:
+                        # A filter may remove OR insert content. Require the
+                        # complete line in both the generated and visible text,
+                        # and in this request's effective system prompt.
+                        eligible = (lab2_instruction_leaks(model_reply, [])
+                                    & lab2_instruction_leaks(reply, [])
+                                    & lab2_instruction_leaks(messages[0]["content"], [])) - supplied
+                    # Preserve the existing three-lines-in-one-reply flag rule.
+                    triggered = triggered and len(eligible) >= 3
+                    digest = lambda text: hashlib.sha256(text.encode()).hexdigest() if text is not None else None
+                    lab2_turn = {
+                        "turn_id": turn_id, "contract_sha256": LAB2_CONTRACT_SHA256,
+                        "source": "live_ollama" if lab2_live else "unverified",
+                        "model": MODEL if lab2_live else None,
+                        "system_prompt_sha256": digest(messages[0]["content"]) if lab2_live else None,
+                        "model_response_sha256": digest(model_reply),
+                        "visible_response_sha256": digest(reply),
+                        "supplied_lines": sorted(supplied), "verified_lines": sorted(eligible),
+                    }
                 record["use_kb"] = use_kb
                 record["exploited"] = record["exploited"] or triggered
                 record["last_result"] = {
@@ -544,7 +681,10 @@ class Application:
                                 else "Exploit verified. Submit the captured flag to earn the points."
                                 if record["exploited"] else "No exploit verified yet. Keep experimenting or reveal a hint."),
                 }
-                self.store.save(sid, data)
+                if lab2_turn is not None:
+                    self.store.save(sid, data, lab2_turn=lab2_turn)
+                else:
+                    self.store.save(sid, data)
                 return self.lab_result(sid, lab_id, data)
         finally:
             self.generation.release()
@@ -594,6 +734,15 @@ class Application:
         flag = body.get("flag")
         if not isinstance(flag, str) or len(flag) > 150:
             raise APIError(400, "Paste a captured PANOPTIS{…} flag.")
+        if lab_id == 2:
+            with self.session_lock(sid):
+                data, newly_completed = self.store.submit_lab2_flag(sid, flag.strip())
+                result = self.lab_result(sid, lab_id, data)
+                result["flag_submission"] = {
+                    "newly_completed": newly_completed,
+                    "points_awarded": CATALOG[1]["points"] if newly_completed else 0,
+                }
+                return result
         with self.session_lock(sid):
             _, data = self.store.get(sid)
             record = data["labs"][str(lab_id)]
@@ -652,6 +801,11 @@ def make_handler(app):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "same-origin")
             self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+            if isinstance(value, dict):
+                lab2 = value.get("lab") or value.get("labs", {}).get("2")
+                version = getattr(lab2, "extraction_version", None)
+                if version is not None:
+                    self.send_header("X-Lab2-Progress-Version", ".".join(map(str, version)))
             if disposition:
                 self.send_header("Content-Disposition", disposition)
             if sid:
