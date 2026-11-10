@@ -7,10 +7,8 @@ const state = { catalog: [], labs: {}, summary: { completed: [], score: 0 }, cur
   kbNotices: new Map(), flagFeedback: new Map(), defenseBusy: new Set() };
 let errorTimer;
 let boilerPanel;
-let boilerSaving = false;
 let alertSaving = false;
 let boilerPolling = false;
-let boilerQueuedInputs = null;
 let boilerVersion = 0;
 
 function node(tag, className, text) {
@@ -45,39 +43,27 @@ function showError(message) {
   errorTimer = setTimeout(() => { $('error').hidden = true; }, 16000);
 }
 
-async function saveBoilerInputs(inputs) {
-  boilerQueuedInputs = inputs;
-  boilerVersion += 1;
-  if (boilerSaving) return;
-  boilerSaving = true;
-  updateControls();
-  try {
-    while (boilerQueuedInputs) {
-      const next = boilerQueuedInputs;
-      boilerQueuedInputs = null;
-      const response = await api('/api/labs/1/boiler', next);
-      state.labs['1'].boiler = response.lab.boiler;
-      if (state.current === 1) boilerPanel?.setState(response.lab.boiler);
-    }
-  } catch (error) {
-    boilerQueuedInputs = null;
-    showError(`Boiler inputs: ${error.message}`);
-  } finally {
-    boilerSaving = false;
-    boilerPanel?.finishInput();
-    updateControls();
+function newestBoilerState(incoming) {
+  const current = state.labs['1'];
+  const [attempt, revision] = current?.boiler_version || [0, 0];
+  const [nextAttempt, nextRevision] = incoming.boiler_version || [0, 0];
+  if (nextAttempt < attempt || (nextAttempt === attempt && nextRevision < revision)) {
+    return { ...incoming, boiler: current.boiler, boiler_version: current.boiler_version };
   }
+  return incoming;
 }
 
 async function refreshBoiler() {
-  if (state.current !== 1 || document.hidden || boilerSaving || boilerPolling || state.resetBusy.has(1) || state.defenseBusy.has(1)) return;
+  if (state.current !== 1 || document.hidden || boilerPolling || state.resetBusy.has(1) || state.defenseBusy.has(1)) return;
   const version = boilerVersion;
   boilerPolling = true;
   try {
     const data = await api('/api/state');
-    if (version !== boilerVersion || boilerSaving) return;
-    state.labs['1'].boiler = data.labs['1'].boiler;
-    if (state.current === 1) boilerPanel?.setState(data.labs['1'].boiler);
+    if (version !== boilerVersion) return;
+    const latest = newestBoilerState(data.labs['1']);
+    state.labs['1'].boiler = latest.boiler;
+    state.labs['1'].boiler_version = latest.boiler_version;
+    if (state.current === 1) boilerPanel?.setState(latest.boiler);
   } catch (error) { showError(`Boiler readings: ${error.message}`); }
   finally { boilerPolling = false; }
 }
@@ -122,17 +108,95 @@ function drawNavigation() {
   }
 }
 
-function appendMessage(role, content, pending = false) {
+function drawBoilerExecution(execution) {
+  const record = currentLab();
+  if (!execution) {
+    // Older replies have no per-turn receipt. Never attribute an old write
+    // to a particular reply or infer execution from its conversational text.
+    const events = record.boiler_tool_calls || [];
+    const readOnly = events.length && events.every(event => event.tool_name === 'get_boiler_status');
+    execution = {
+      status: 'unverified',
+      message: readOnly
+        ? 'This attempt’s recorded activity was read-only. No input changes are recorded. Any claim of a successful change is unverified.'
+        : 'This earlier reply has no stored execution confirmation. Any claim of a successful input change is unverified.',
+      water_in_pct: record.boiler.water,
+      fuel_in_pct: record.boiler.fuel,
+    };
+  }
+  const result = node('aside', 'simulator-result');
+  result.setAttribute('aria-label', 'Authoritative simulator record');
+  result.dataset.status = execution.status;
+  result.append(node('strong', '', 'Simulator record'), node('p', '', execution.message),
+    node('p', 'simulator-inputs', `${execution.status === 'unverified' ? 'Current saved inputs' : 'Saved inputs at this reply'} · Water In: ${execution.water_in_pct}% · Fuel In: ${execution.fuel_in_pct}%`));
+  return result;
+}
+
+function lab1Commentary(content, execution) {
+  const status = execution?.status || 'unverified';
+  const wrote = status === 'write_executed';
+  const noWrite = ['write_rejected', 'read_only', 'no_tools'].includes(status);
+  // Reconcile only execution commentary. Keep readings and ordinary discussion,
+  // and leave the stored response and model history untouched.
+  const control = /\b(?:set_boiler_inputs|(?:water|fuel)\s+in|inputs?|settings?|writes?|changes?|adjustments?|modifications?|operation|request|execution|action|tool|command|result|it|this|that|lab\s*1)\b/i;
+  const notExecuted = /\b(?:not|never|without)\s+(?:(?:actually|really|successfully|be|been|being|yet)\s+)*(?:execut\w*|appl\w*|perform\w*|chang\w*|adjust\w*|updat\w*|modif\w*|alter\w*|set|sav\w*|succeed\w*|complet\w*|go\s+through|take\s+effect|happen|carr(?:y|ied)\s+out|mak(?:e|ing)\s+(?:any\s+)?changes?)\b/gi;
+  const noChanges = /\b(?:no\s+(?:(?:actual|real|input|setting|equipment)\s+)*changes?|no\s+(?:inputs?|settings?)\s+(?:(?:were|was|have\s+been|has\s+been)\s+)?(?:changed|adjusted|updated|set)|nothing\s+changed|(?:inputs?|settings?)\s+(?:(?:are|were|remain|remained|have\s+remained)\s+)?unchanged|(?:inputs?|settings?)\s+(?:stayed|remained)\s+(?:the\s+same|at\s+(?:their\s+)?(?:original|previous|initial)\s+values))\b/gi;
+  const rejection = /\b(?:reject\w*|block\w*|denied|refus\w*|fail\w*|prevent\w*)\b/i;
+  const simulationOnly = /\b(?:(?:only|merely|just)\s+(?:(?:a|been)\s+)?simulat\w*|simulat\w*\s+only|dry[ -]run|hypothetical\s+(?:change|adjustment|execution|result))\b/i;
+  const refused = /\b(?:can\s+not|cannot|unable\s+to|not\s+(?:allowed|permitted|authorized)\s+to)\s+(?:\w+\s+){0,3}(?:change|set|adjust|update|modify|alter|execute|apply)\b/i;
+  let omitted = false;
+  const text = content.split(/(?<=[.!?;])(?=\s)|(?<=\n)|(?=,?\s+(?:but|however|although|yet)\b)/i).filter(part => {
+    const plain = part.replace(/[*`]/g, '').replace(/[’‘]/g, "'").replace(/n't\b/gi, ' not');
+    // "Not rejected" is not a rejection, and "not executed" is not success.
+    const claim = plain.replace(/\bnot\s+(?:rejected|blocked|denied|refused)\b/gi, '');
+    const positive = claim.replace(notExecuted, '').replace(noChanges, '');
+    const aboutControls = control.test(claim);
+    const denied = aboutControls && rejection.test(claim);
+    const simulated = simulationOnly.test(claim);
+    const negative = claim.match(notExecuted) || claim.match(noChanges)
+      || (aboutControls && refused.test(claim)) || denied || simulated
+      || /\bno\s+(?:(?:actual|real)\s+)?(?:write|execution|input\s+change|action)\s+(?:occurred|took\s+place|was\s+(?:made|performed|executed))\b/i.test(claim)
+      || /["']?(?:ok|success|executed)["']?\s*:\s*false\b/i.test(claim);
+    const readReport = /\b(?:get_boiler_status|status|readings|telemetry)\b/i.test(positive)
+      && !/\b(?:set_boiler_inputs|(?:water|fuel)\s+in|inputs?|settings?|write|changes?|adjustments?)\b/i.test(positive);
+    const affirmative = (!readReport && control.test(positive)
+      && /\b(?:executed|applied|performed|accepted|succeeded|completed|updated|adjusted|changed|saved|wrote|successful(?:ly)?|success|went\s+through|took\s+effect)\b/i.test(positive))
+      || /\b(?:i|we)(?:\s+have|'ve)?\s+(?:(?:successfully|actually|already|now)\s+)*set\b/i.test(positive)
+      || (control.test(positive) && /\b(?:was|were|(?:has|have)\s+(?:now\s+)?been|successfully)\s+(?:(?:successfully|actually|already|now)\s+)*set\b/i.test(positive))
+      || /^\s*(?:done|all\s+set|success(?:ful)?|executed|applied|updated|completed)[.!\s]*$/i.test(positive)
+      || /["']?(?:ok|success|executed)["']?\s*:\s*true\b/i.test(positive)
+      || /\bafter\s+(?:the\s+)?(?:adjustment|input\s+change)\b/i.test(positive);
+    const conflict = wrote ? negative : noWrite
+      ? affirmative || simulated || (denied && status !== 'write_rejected')
+      : negative || affirmative;
+    if (conflict) omitted = true;
+    return !conflict;
+  }).join('');
+  return { text: omitted ? text.trim().replace(/^,?\s*(?:but|however|although|yet)\b[,;]?\s*/i, '').replace(/[,;]\s*$/, '') : content, omitted };
+}
+
+function appendMessage(role, content, pending = false, execution = null) {
   const wrapper = node('div', `message ${role}${pending ? ' pending' : ''}`);
-  wrapper.append(node('span', 'speaker', role === 'user' ? 'YOU' : assistantName().toUpperCase()));
+  const lab1Reply = state.current === 1 && role === 'assistant' && !pending;
+  const commentary = lab1Reply ? lab1Commentary(content, execution) : { text: content, omitted: false };
+  if (lab1Reply) wrapper.append(drawBoilerExecution(execution));
+  wrapper.append(node('span', 'speaker', role === 'user' ? 'YOU' : lab1Reply ? 'PLANT AI · MODEL RESPONSE' : assistantName().toUpperCase()));
   const bubble = node('div', 'bubble');
   if (pending) {
     const dots = node('span', 'thinking-dots');
     dots.setAttribute('aria-hidden', 'true');
     dots.append(node('i'), node('i'), node('i'));
     bubble.append(dots, node('span', '', 'Thinking'), node('span', 'thinking-time', '0s'));
-  } else bubble.textContent = role === 'assistant' ? assistantBranding(content) : content;
+  } else bubble.textContent = role === 'assistant' ? assistantBranding(commentary.text) : content;
   wrapper.append(bubble);
+  if (commentary.omitted) {
+    wrapper.append(node('p', 'model-execution-note', 'Execution details are shown in the simulator record above.'));
+    const debug = node('details', 'model-response-debug');
+    debug.append(node('summary', '', 'Raw model response · unverified'),
+      node('p', '', 'Debug text only. Execution claims below may contradict the authoritative simulator record.'),
+      node('div', 'bubble', content));
+    wrapper.append(debug);
+  }
   $('messages').append(wrapper);
 }
 
@@ -145,7 +209,7 @@ function drawConversation() {
     empty.append(node('h3', '', 'Start a conversation.'), node('p', '', metadata().has_kb ? `Plant a document in the knowledge base, then ask ${assistantName()} about it.` : `Ask ${assistantName()} a question, or try your first attack. Use the hints in the scenario panel.`));
     $('messages').append(empty);
   }
-  for (const message of record.messages) appendMessage(message.role, message.content);
+  for (const message of record.messages) appendMessage(message.role, message.content, false, message.boiler_execution);
   if (pending) { appendMessage('user', pending.message); appendMessage('assistant', '', true); }
   $('messages').scrollTop = $('messages').scrollHeight;
   $('turn-count').textContent = `${Math.floor(record.messages.length / 2)} turns`;
@@ -153,7 +217,8 @@ function drawConversation() {
   $('attempt-result').hidden = !record.last_result || Boolean(pending);
   if (record.last_result && !pending) {
     const result = record.last_result;
-    $('attempt-result').className = `attempt-result${record.exploited ? ' success' : result.defense_blocked ? ' blocked' : ''}`;
+    const verified = state.current === 1 ? result.triggered : record.exploited;
+    $('attempt-result').className = `attempt-result${verified ? ' success' : result.defense_blocked ? ' blocked' : ''}`;
     $('attempt-result').append(node('p', '', result.message));
     const details = node('details');
     details.append(node('summary', '', `Attempt details · ${result.seconds}s`));
@@ -182,16 +247,18 @@ function drawHints() {
 
 function drawFlag() {
   const record = currentLab();
+  const hideSubmission = record.completed && state.current !== 1;
   $('flag-button').textContent = record.completed ? '✓ Completed' : record.exploited ? 'Flag captured' : 'Submit flag';
   $('flag-button').className = `tool-button${record.exploited ? ' captured' : ''}`;
   $('flag-heading').textContent = record.completed ? 'Lab complete.' : record.exploited ? 'You found the flag.' : 'Find it. Submit it.';
   $('flag-instructions').textContent = record.completed ? `${metadata().points} points earned. You can keep experimenting or move to the next lab.` : record.exploited ? 'The server verified the exploit. Use the captured flag below to claim your points.' : 'Trigger the exploit in chat to reveal this lab’s flag. Submit it here to earn the points.';
   $('captured-panel').hidden = !record.exploited;
   $('captured-flag').textContent = record.flag || '';
-  $('use-captured-flag').hidden = record.completed;
-  $('flag-form').hidden = record.completed;
+  $('use-captured-flag').hidden = hideSubmission;
+  $('flag-form').hidden = hideSubmission;
   $('flag-input').value = state.flagDrafts.get(state.current) || '';
   $('award-points').textContent = `+${metadata().points}`;
+  $('award-points').hidden = state.current === 1 && record.completed;
   const feedback = state.flagFeedback.get(state.current);
   $('flag-feedback').hidden = !feedback;
   $('flag-feedback').textContent = feedback?.message || '';
@@ -240,8 +307,8 @@ function updateControls() {
   if (!anyPending) $('send').append(node('span', '', '↗'));
   $('prompt').disabled = ownPending;
   $('composer-help').textContent = anyPending && !ownPending ? 'The AI is replying in another lab. You can still explore.' : 'Enter to send · Shift + Enter for a new line';
-  $('restart-lab').disabled = ownPending || state.resetBusy.has(state.current) || changingDefense || (state.current === 1 && (boilerSaving || alertSaving));
-  $('defense-select').disabled = ownPending || changingDefense || state.resetBusy.has(state.current) || (state.current === 1 && (boilerSaving || alertSaving));
+  $('restart-lab').disabled = ownPending || state.resetBusy.has(state.current) || changingDefense || (state.current === 1 && alertSaving);
+  $('defense-select').disabled = ownPending || changingDefense || state.resetBusy.has(state.current) || (state.current === 1 && alertSaving);
   $('flag-input').disabled = !record.exploited || state.flagBusy.has(state.current);
   $('submit-flag').disabled = !record.exploited || state.flagBusy.has(state.current);
   $('use-captured-flag').disabled = state.flagBusy.has(state.current);
@@ -264,7 +331,6 @@ function drawWorkspace() {
       boilerPanel = document.createElement('boiler-panel');
       boilerPanel.id = 'boiler-panel';
       boilerPanel.setAttribute('embedded', '');
-      boilerPanel.addEventListener('boiler-inputs', (event) => saveBoilerInputs(event.detail));
       boilerPanel.addEventListener('alert-comment-save', (event) => saveAlertComment(event.detail));
     }
     if (boilerPanel.parentElement !== target) target.replaceChildren(boilerPanel);
@@ -470,7 +536,7 @@ function navigate(id, push = true) {
 
 function acceptResponse(id, response) {
   const justCaptured = !state.labs[String(id)].exploited && response.lab.exploited;
-  state.labs[String(id)] = response.lab;
+  state.labs[String(id)] = id === 1 ? newestBoilerState(response.lab) : response.lab;
   state.summary = response.summary;
   if (state.current === id) {
     drawLab();
@@ -530,7 +596,9 @@ async function submitFlag(event) {
   state.flagBusy.add(id); updateControls();
   try {
     const response = await api(`/api/labs/${id}/flag`, { flag });
-    state.flagFeedback.set(id, { message: `+${metadata(id).points} points. Well played.` });
+    state.flagFeedback.set(id, { message: id === 1 && state.labs['1'].completed
+      ? 'Flag accepted. Lab 1 is complete; points were already awarded.'
+      : `+${metadata(id).points} points. Well played.` });
     acceptResponse(id, response);
   } catch (error) {
     state.flagFeedback.set(id, { message: error.message, error: true });
@@ -540,12 +608,11 @@ async function submitFlag(event) {
 
 async function restartLab() {
   const id = state.current;
-  if (state.pending.has(id) || state.resetBusy.has(id) || (id === 1 && (boilerSaving || alertSaving))) return;
+  if (state.pending.has(id) || state.resetBusy.has(id) || (id === 1 && alertSaving)) return;
   if (id === 1) boilerVersion += 1;
   state.resetBusy.add(id); updateControls();
   try {
     const response = await api(`/api/labs/${id}/reset`, {});
-    if (id === 1) boilerPanel?.finishInput();
     for (const map of [state.promptDrafts, state.flagDrafts, state.editors, state.hintCounts, state.kbNotices, state.flagFeedback]) map.delete(id);
     acceptResponse(id, response);
   } catch (error) { showError(`Lab ${id}: ${error.message}`); }

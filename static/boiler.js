@@ -11,7 +11,6 @@
       this.attachShadow({ mode: 'open' });
       this._context = { labId: '1', defense: '0' };
       this._state = null;
-      this._editing = false;
       this._alertDrafts = new Map();
       this._alertForms = new Map();
       this._alertSaving = false;
@@ -63,12 +62,11 @@
             <div class="reading power"><span>Power output</span><strong data-power>36.0</strong><small>kW</small></div>
           </div>
           <div class="level"><label for="water-level">Water level</label><meter id="water-level" min="0" max="100" low="20" high="90" optimum="60" value="62">62%</meter><span data-level>62%</span></div>
-          <div class="controls">
-            <div class="control"><label for="fuel">Fuel intake <output for="fuel" aria-live="off" data-fuel>55%</output></label><input id="fuel" type="range" min="0" max="100" step="1" value="55" aria-valuetext="55 percent"><small>Less heat ↔ more heat</small></div>
-            <div class="control"><label for="water">Water intake <output for="water" aria-live="off" data-water>60%</output></label><input id="water" type="range" min="0" max="100" step="1" value="60" aria-valuetext="60 percent"><small>Less flow ↔ more flow</small></div>
+          <div class="controls" role="group" aria-label="Inputs controlled by Plant AI">
+            <div class="control"><label for="fuel">Fuel intake <output for="fuel" aria-live="off" data-fuel>55%</output></label><meter id="fuel" min="0" max="100" value="55" aria-valuetext="55 percent" aria-describedby="boiler-control-note">55%</meter></div>
+            <div class="control"><label for="water">Water intake <output for="water" aria-live="off" data-water>60%</output></label><meter id="water" min="0" max="100" value="60" aria-valuetext="60 percent" aria-describedby="boiler-control-note">60%</meter></div>
           </div>
-          <div class="actions"><button type="button" data-action="toggle" aria-pressed="true" disabled>Boiler running</button><button type="button" data-action="reset">Reset inputs ↺</button></div>
-          <p class="caption">Fuel heats the water. Steam turns the generator.<br>Adjust the inputs to watch the simulated readings respond.</p>
+          <p id="boiler-control-note" class="caption">Live simulation · Inputs controlled by Plant AI.<br>Use the chat to request fuel or water changes.</p>
         </section>
         <section class="panel" aria-labelledby="operational-alerts-heading" data-operational-alerts>
           <header class="heading"><h2 id="operational-alerts-heading">Operational Alerts</h2></header>
@@ -79,18 +77,6 @@
       for (const name of ['context', 'temperature', 'pressure', 'power', 'level', 'fuel', 'water', 'status', 'status-title', 'status-detail', 'vessel-water', 'needle', 'flame', 'rotor', 'bubbles', 'water-flow', 'fuel-flow', 'steam-flow', 'power-flow', 'diagram-temperature', 'diagram-power']) {
         this._refs[name] = this.shadowRoot.querySelector(`[data-${name}]`);
       }
-      for (const control of ['fuel', 'water']) {
-        const input = this.shadowRoot.getElementById(control);
-        input.disabled = true;
-        input.addEventListener('input', (event) => {
-          this._editing = true;
-          this._refs[control].textContent = `${event.target.value}%`;
-        });
-        input.addEventListener('change', () => {
-          this._requestInputs({ fuel: Number(this.shadowRoot.getElementById('fuel').value), water: Number(this.shadowRoot.getElementById('water').value) });
-        });
-      }
-      this.shadowRoot.querySelector('[data-action=reset]').addEventListener('click', () => this._requestInputs({ fuel: 55, water: 60 }));
     }
 
     connectedCallback() { this._render(); }
@@ -191,24 +177,11 @@
       if (form) form.feedback.textContent = error ? `Not saved: ${error}` : 'Saved';
     }
 
-    finishInput() { this._editing = false; this._render(); }
-
     get simulationState() { return this._state ? { ...this._state, ...this._context } : null; }
-
-    _requestInputs(inputs) {
-      this._editing = true;
-      for (const control of ['fuel', 'water']) {
-        this.shadowRoot.getElementById(control).value = inputs[control];
-        this._refs[control].textContent = `${inputs[control]}%`;
-      }
-      this.dispatchEvent(new CustomEvent('boiler-inputs', { detail: inputs, bubbles: true, composed: true }));
-    }
 
     _render() {
       const s = this._state;
       const r = this._refs;
-      for (const control of ['fuel', 'water']) this.shadowRoot.getElementById(control).disabled = !s;
-      this.shadowRoot.querySelector('[data-action=reset]').disabled = !s;
       if (!s) {
         r['status-title'].textContent = 'Connecting';
         r['status-detail'].textContent = 'Waiting for readings';
@@ -220,12 +193,11 @@
       r.level.textContent = `${Math.round(s.level)}%`;
       this.shadowRoot.getElementById('water-level').value = s.level;
       for (const control of ['fuel', 'water']) {
-        const input = this.shadowRoot.getElementById(control);
-        if (!this._editing) {
-          if (input.value !== String(s[control])) input.value = s[control];
-          r[control].textContent = `${s[control]}%`;
-        }
-        input.setAttribute('aria-valuetext', `${input.value} percent`);
+        const indicator = this.shadowRoot.getElementById(control);
+        if (indicator.value !== s[control]) indicator.value = s[control];
+        indicator.textContent = `${s[control]}%`;
+        r[control].textContent = `${s[control]}%`;
+        indicator.setAttribute('aria-valuetext', `${indicator.value} percent`);
       }
       r['diagram-temperature'].textContent = `${Math.round(s.temperature)} °C`;
       // Reuse nodes; no model text is interpreted as markup.

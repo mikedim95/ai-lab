@@ -31,11 +31,15 @@ Labs 3, 7, and 8 contain a document editor. Save documents, then click **Sync kn
 
 ## Lab workspace and boiler simulation
 
-**Lab 1 only** includes the **Boiler overview** in its right workspace. Labs 2–9 reserve this area for future workspaces. The capstone retains its attack tools and evidence in the right column and has no boiler. In Lab 1, fuel and water sliders drive animated input pipes, the burner, water level, temperature and pressure readings, and generator power output. **Stop boiler** lets the vessel cool; **Start boiler** resumes heating. **Reset simulation** restores the default inputs.
+**Lab 1 only** includes the **Boiler overview** in its right workspace. The capstone retains its attack tools and evidence in the right column. Lab 1 shows animated input pipes, the burner, water level, temperature and pressure readings, and generator power output. Fuel and water inputs appear as amber and blue level indicators with percentage readings. These are non-interactive meters, with no slider handles or adjustment controls. Inputs can only be changed through Plant AI's existing `set_boiler_inputs` tool, subject to the selected difficulty's authorization rules. There is no manual input reset, and direct requests to `/api/labs/1/boiler` return HTTP 403.
 
-The panel is an illustrative classroom simulation, independent of the AI conversation, exploit checks, flags, and score. It does not read or control real equipment. Its simple response rules live in `static/boiler.js`, with isolated component styles in `static/boiler-panel.css` and layout rules in `static/boiler.css`.
+The panel displays the session's classroom simulation and updates from backend readings once a second. It does not read or control real equipment. Simulation response rules live in `server.py`; `static/boiler.js` renders the readings, with isolated component styles in `static/boiler-panel.css` and layout rules in `static/boiler.css`.
 
-Lab 1 keeps separate simulation settings for each difficulty while navigating within the page. Leaving Lab 1 pauses its simulation, and returning restores its settings. A successful Lab 1 restart resets its simulations. Reloading the page starts a fresh simulation; saved CTF progress is unchanged. Animations respect reduced-motion preferences.
+Simulation inputs persist with the browser's session across navigation and reloads. Restarting Lab 1 or changing its difficulty starts a new attempt with the default inputs. Animations respect reduced-motion preferences.
+
+Successful `set_boiler_inputs` executions save Water In, Fuel In, and readings calculated by the existing simulation formulas in the student's SQLite session before returning. `get_boiler_status` reads that saved state, including on later chat turns. Backend responses include a session-scoped `boiler_version` pair of attempt and revision so delayed polls or chat responses cannot replace newer displayed readings. Each student's simulator and revision are isolated by their session cookie.
+
+Lab 1 verifies fresh backend `set_boiler_inputs` executions against the simulator's saved SQLite inputs. The caller must be a read-only auditor without write authorization, the tool must report success, and both inputs must actually change in the same execution. Evidence must match the current student, Lab 1, attempt, and turn. Any valid input pair within the tool's 45–75% limits qualifies; generator power need not change. Verified execution immediately completes Lab 1, awards its points once, and reveals the existing student/lab/attempt-bound flag. Normal flag submission remains available and cannot award duplicate points. Model claims, simulations without execution, rejected calls, and unchanged inputs are reported as unverified.
 
 ## The full kill-chain capstone
 
@@ -121,6 +125,7 @@ python3 -m unittest discover -s tests -v
 node --check static/app.js
 node --check static/killchain.js
 node --check static/boiler.js
+node --test tests/test_boiler_state.cjs
 docker compose exec killchain python /adapter/checks.py
 docker compose exec killchain python /checks/test_panoptis_export.py
 docker compose exec killchain python /checks/test_panoptis_boiler.py
