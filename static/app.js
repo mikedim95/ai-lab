@@ -31,6 +31,13 @@ function staleLab3Response(current, incoming) {
     || (current.completed === true && incoming.completed !== true);
 }
 
+function staleLab6Response(current, incoming) {
+  return staleLab3Response(current, incoming)
+    || (current?.attempt === incoming?.attempt
+      && Number.isSafeInteger(current?.reply_revision) && Number.isSafeInteger(incoming?.reply_revision)
+      && incoming.reply_revision < current.reply_revision);
+}
+
 function lab2Version(value) {
   if (typeof value !== 'string' || !/^\d+\.\d+\.[01]$/.test(value)) return null;
   const version = value.split('.').map(Number);
@@ -265,6 +272,15 @@ function lab5Feedback(result) {
   })[result.escalation_status] || 'Normal maintenance conversation.';
 }
 
+function lab6Feedback(result) {
+  if (result.triggered === true && result.identity_status === 'adopted') return 'Verified Control Engineer identity adoption.';
+  return ({
+    monitoring: 'Normal monitoring conversation.',
+    attempted: 'Identity-change attempt detected.',
+    refused: 'Identity change refused or not established.',
+  })[result.identity_status] || 'Identity change refused or not established.';
+}
+
 function drawConversation() {
   const record = currentLab();
   const pending = state.pending.get(state.current);
@@ -282,11 +298,13 @@ function drawConversation() {
   $('attempt-result').hidden = !record.last_result || Boolean(pending);
   if (record.last_result && !pending) {
     const result = record.last_result;
-    const verified = state.current === 5 ? result.triggered === true
+    const verified = state.current === 6 ? result.triggered === true && result.identity_status === 'adopted'
+      : state.current === 5 ? result.triggered === true
       : state.current === 1 || state.current === 2 || state.current === 4 ? result.triggered : record.exploited;
     $('attempt-result').className = `attempt-result${verified ? ' success' : result.defense_blocked ? ' blocked' : ''}`;
     const message = state.current === 4 ? lab4Feedback(result)
       : state.current === 5 ? lab5Feedback(result)
+      : state.current === 6 ? lab6Feedback(result)
       : state.current === 2 && record.exploited && !result.triggered && !result.defense_blocked
       ? 'This reply did not verify an extraction. Your previously captured flag and any earned points are still saved.'
       : result.message;
@@ -294,9 +312,9 @@ function drawConversation() {
     const details = node('details');
     details.append(node('summary', '', `Attempt details · ${result.seconds}s`));
     const lines = node('ul');
-    if (result.defense_blocked) lines.append(node('li', '', [4, 5].includes(state.current)
+    if (result.defense_blocked) lines.append(node('li', '', [4, 5, 6].includes(state.current)
       ? 'The selected defenses blocked this attempt.' : result.defense_reason || 'The selected defenses blocked this attempt.'));
-    else lines.append(node('li', '', result.triggered ? 'Exploit verified.' : 'No exploit detected.'));
+    else lines.append(node('li', '', (state.current === 6 ? verified : result.triggered) ? 'Exploit verified.' : 'No exploit detected.'));
     if (metadata().has_kb) {
       if (state.current === 3) {
         const sources = result.sources || [];
@@ -331,7 +349,7 @@ function drawHints() {
 function drawFlag() {
   const record = currentLab();
   const hideSubmission = record.completed && state.current !== 1;
-  const captured = record.exploited || ([3, 4, 5].includes(state.current) && record.completed === true && Boolean(record.flag));
+  const captured = record.exploited || ([3, 4, 5, 6].includes(state.current) && record.completed === true && Boolean(record.flag));
   $('flag-button').textContent = record.completed ? '✓ Completed' : record.exploited ? 'Flag captured' : 'Submit flag';
   $('flag-button').className = `tool-button${record.exploited ? ' captured' : ''}`;
   $('flag-heading').textContent = record.completed ? 'Lab complete.' : record.exploited ? 'You found the flag.' : 'Find it. Submit it.';
@@ -350,6 +368,7 @@ function drawFlag() {
   $('lab3-completion-explanation').hidden = !(state.current === 3 && record.completed === true);
   $('lab4-completion-explanation').hidden = !(state.current === 4 && record.completed === true);
   $('lab5-completion-explanation').hidden = !(state.current === 5 && record.completed === true);
+  $('lab6-completion-explanation').hidden = !(state.current === 6 && record.completed === true);
 }
 
 function lab3DocumentStatus(id, record = state.labs['3'], draft = state.editors.get(3)) {
@@ -675,7 +694,7 @@ Status: Unverified contractor maintenance report.`
       row.append(reading); details.append(row);
     }
     panel.append(heading, details,
-      node('p', 'scenario-summary', 'Chat impersonation does not change assigned roles or grant control permissions.'));
+      node('p', 'scenario-summary', 'This lab tests identity claims. Even verified identity adoption grants no actual equipment permissions.'));
     target.replaceChildren(panel);
   } else if (!target.querySelector('.workspace-empty')) {
     const placeholder = node('div', 'workspace-empty');
@@ -731,6 +750,7 @@ function acceptResponse(id, response) {
   if (id === 3 && staleLab3Response(state.labs['3'], response.lab)) return false;
   if (id === 4 && staleLab3Response(state.labs['4'], response.lab)) return false;
   if (id === 5 && staleLab3Response(state.labs['5'], response.lab)) return false;
+  if (id === 6 && staleLab6Response(state.labs['6'], response.lab)) return false;
   const justCaptured = !state.labs[String(id)].exploited && response.lab.exploited;
   state.labs[String(id)] = id === 1 ? newestBoilerState(response.lab) : response.lab;
   state.summary = response.summary;
@@ -749,6 +769,7 @@ async function sendMessage(event) {
   if (!message) return;
   const requestVersion = id === 2 ? state.labs['2']?._extractionVersion : null;
   const pendingRequest = { message, started: Date.now() };
+  if (id === 6) state.labs['6'] = { ...state.labs['6'], last_result: null };
   state.pending.set(id, pendingRequest);
   state.promptDrafts.set(id, '');
   $('prompt').value = '';
@@ -807,6 +828,7 @@ async function submitFlag(event) {
   const requestLab3 = id === 3 ? state.labs['3'] : null;
   const requestLab4 = id === 4 ? state.labs['4'] : null;
   const requestLab5 = id === 5 ? state.labs['5'] : null;
+  const requestLab6 = id === 6 ? state.labs['6'] : null;
   state.flagDrafts.set(id, flag);
   state.flagBusy.add(id); updateControls();
   try {
@@ -845,6 +867,14 @@ async function submitFlag(event) {
         && state.labs['5'].completed !== true;
       state.flagFeedback.set(id, { message: newlyAwarded
         ? `+${metadata(id).points} points. Well played.` : 'Lab already completed' });
+    } else if (id === 6) {
+      if (staleLab6Response(state.labs['6'], response.lab)) return;
+      if (response.lab.completed !== true) throw new Error('The server did not confirm Lab 6 completion. Please refresh and try again.');
+      const newlyAwarded = response.flag_submission?.newly_completed === true
+        && response.flag_submission.points_awarded === metadata(id).points
+        && state.labs['6'].completed !== true;
+      state.flagFeedback.set(id, { message: newlyAwarded
+        ? `+${metadata(id).points} points. Well played.` : 'Lab already completed' });
     } else {
       state.flagFeedback.set(id, { message: id === 1 && state.labs['1'].completed
         ? 'Flag accepted. Lab 1 is complete; points were already awarded.'
@@ -859,6 +889,8 @@ async function submitFlag(event) {
         || (state.labs['4'].completed === true && requestLab4.completed !== true))) return;
     if (id === 5 && (state.labs['5'].attempt !== requestLab5.attempt
         || (state.labs['5'].completed === true && requestLab5.completed !== true))) return;
+    if (id === 6 && (state.labs['6'].attempt !== requestLab6.attempt
+        || (state.labs['6'].completed === true && requestLab6.completed !== true))) return;
     state.flagFeedback.set(id, { message: error.message, error: true });
     if (state.current === id) drawFlag();
   } finally { state.flagBusy.delete(id); updateControls(); }
@@ -894,7 +926,7 @@ async function changeDefense() {
     ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current extraction progress. Your captured flag and earned points stay saved. Continue?'
     : id === 3
     ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current verification. Earned completion and points stay saved. Your knowledge base stays saved. Continue?'
-    : id === 4 || id === 5
+    : id === 4 || id === 5 || id === 6
     ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current verification. Earned completion and points stay saved. Continue?'
     : 'Changing difficulty starts a new attempt and clears this lab’s chat, captured flag, and points. Your knowledge base stays saved. Continue?';
   if ((record.messages.length || record.completed || record.exploited) && !window.confirm(confirmation)) {

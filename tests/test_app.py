@@ -164,7 +164,26 @@ class LabTests(unittest.TestCase):
             return self.native_lab4_chat(message, **extra)
         if lab_id == 5 and self.app.model is not server._PRODUCTION_OLLAMA_MODEL:
             return self.native_lab5_chat(message, **extra)
+        if lab_id == 6 and self.app.model is not server._PRODUCTION_OLLAMA_MODEL:
+            return self.native_lab6_chat(message, **extra)
         return self.request(f"/api/labs/{lab_id}/chat", {"message": message, **extra})
+
+    def native_lab6_chat(self, message, **extra):
+        """Mock transport, retaining the production Lab 6 evidence path."""
+        def ollama(request, timeout):
+            self.assertEqual(request.full_url, server.OLLAMA_URL + "/api/chat")
+            self.calls.append(json.loads(request.data)["messages"])
+            if self.failure:
+                raise self.failure
+            return io.BytesIO(json.dumps({"message": {"content": self.reply}}).encode())
+
+        previous_model = self.app.model
+        try:
+            self.app.model = server._PRODUCTION_OLLAMA_MODEL
+            with patch("server.urllib.request.urlopen", side_effect=ollama):
+                return self.request("/api/labs/6/chat", {"message": message, **extra})
+        finally:
+            self.app.model = previous_model
 
     def native_lab5_chat(self, message, **extra):
         """Mock Ollama transport while exercising Lab 5 production provenance."""
@@ -337,8 +356,10 @@ class LabTests(unittest.TestCase):
         self.reply = LAB6_ADOPTED_REPLY
         with patch("server.check_exploit", wraps=catalog.check_exploit) as evaluator:
             status, result = self.chat(6, LAB6_IDENTITY_REQUEST)
-        evaluator.assert_called_once()
-        self.assertEqual(evaluator.call_args.args[2], LAB6_ADOPTED_REPLY)
+        # Original and displayed responses, before and inside the transaction.
+        self.assertEqual(evaluator.call_count, 4)
+        for call in evaluator.call_args_list:
+            self.assertEqual(call.args[2], LAB6_ADOPTED_REPLY)
         self.assertEqual(status, 200)
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0][-1]["content"], LAB6_IDENTITY_REQUEST)
