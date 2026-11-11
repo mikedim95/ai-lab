@@ -162,7 +162,26 @@ class LabTests(unittest.TestCase):
             return self.native_lab3_chat(message, **extra)
         if lab_id == 4 and self.app.model is not server._PRODUCTION_OLLAMA_MODEL:
             return self.native_lab4_chat(message, **extra)
+        if lab_id == 5 and self.app.model is not server._PRODUCTION_OLLAMA_MODEL:
+            return self.native_lab5_chat(message, **extra)
         return self.request(f"/api/labs/{lab_id}/chat", {"message": message, **extra})
+
+    def native_lab5_chat(self, message, **extra):
+        """Mock Ollama transport while exercising Lab 5 production provenance."""
+        def ollama(request, timeout):
+            self.assertEqual(request.full_url, server.OLLAMA_URL + "/api/chat")
+            self.calls.append(json.loads(request.data)["messages"])
+            if self.failure:
+                raise self.failure
+            return io.BytesIO(json.dumps({"message": {"content": self.reply}}).encode())
+
+        previous_model = self.app.model
+        try:
+            self.app.model = server.local_model
+            with patch("server.urllib.request.urlopen", side_effect=ollama):
+                return self.request("/api/labs/5/chat", {"message": message, **extra})
+        finally:
+            self.app.model = previous_model
 
     def native_lab4_chat(self, message, **extra):
         """Mock Ollama transport while exercising Lab 4 production provenance."""
@@ -853,7 +872,7 @@ class LabTests(unittest.TestCase):
                 self.assertEqual(evaluator.call_args.args[2], catalog.LAB5_REFUSAL)
                 self.assert_lab5_unawarded(result)
 
-    def test_lab5_restart_clears_history_invalidates_flag_and_preserves_other_labs(self):
+    def test_lab5_restart_clears_verification_preserves_earned_flag_and_other_labs(self):
         self.request()
         _, before = self.app.store.get(self.sid())
         others = {k: copy.deepcopy(v) for k, v in before["labs"].items() if k != "5"}
@@ -864,16 +883,26 @@ class LabTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(reset["lab"]["messages"], [])
         self.assertFalse(reset["lab"]["exploited"])
-        self.assertFalse(reset["lab"]["completed"])
-        self.assertIsNone(reset["lab"]["flag"])
-        self.assertEqual(self.request("/api/labs/5/flag", {"flag": old_flag})[0], 403)
-        self.assert_lab5_unawarded(self.lab5_sequence(messages=(LAB5_MESSAGES[2],)))
-        new_flag = self.lab5_sequence()["lab"]["flag"]
-        self.assertRegex(new_flag, r"^PANOPTIS\{[A-F0-9]{32}\}$")
-        self.assertNotEqual(new_flag, old_flag)
-        status, rejected = self.request("/api/labs/5/flag", {"flag": old_flag})
-        self.assertEqual(status, 400)
-        self.assertIn("does not match this lab and attempt", rejected["error"])
+        self.assertTrue(reset["lab"]["completed"])
+        self.assertEqual(reset["lab"]["flag"], old_flag)
+        self.assertEqual(reset["summary"]["score"], 250)
+        status, replay = self.request("/api/labs/5/flag", {"flag": old_flag})
+        self.assertEqual(status, 200)
+        self.assertEqual(replay["flag_submission"]["points_awarded"], 0)
+        self.reply = LAB5_DISCLOSURE
+        status, single = self.chat(5, LAB5_MESSAGES[2])
+        self.assertEqual(status, 200)
+        self.assertFalse(single["lab"]["last_result"]["triggered"])
+        self.assertFalse(single["lab"]["exploited"])
+        for index, message in enumerate(LAB5_MESSAGES):
+            self.reply = LAB5_DISCLOSURE if index == 2 else "Check the technician handover records."
+            status, new_attempt = self.chat(5, message)
+            self.assertEqual(status, 200)
+        self.assertTrue(new_attempt["lab"]["last_result"]["triggered"])
+        self.assertEqual(new_attempt["lab"]["flag"], old_flag)
+        status, replay = self.request("/api/labs/5/flag", {"flag": old_flag})
+        self.assertEqual(status, 200)
+        self.assertEqual(replay["flag_submission"]["points_awarded"], 0)
         _, after = self.app.store.get(self.sid())
         self.assertEqual({k: v for k, v in after["labs"].items() if k != "5"}, others)
 
