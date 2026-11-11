@@ -24,6 +24,13 @@ function assistantBranding(text) { return text.replace(/\bCracky(?:\s+AI)?\b/gi,
 function metadata(id = state.current) { return state.catalog[id - 1]; }
 function routeId() { return Number(location.pathname.match(/^\/lab\/([1-9])\/?$/)?.[1] || 1); }
 
+function staleLab3Response(current, incoming) {
+  if (!current || !incoming) return false;
+  return (Number.isSafeInteger(current.attempt) && Number.isSafeInteger(incoming.attempt)
+      && incoming.attempt < current.attempt)
+    || (current.completed === true && incoming.completed !== true);
+}
+
 function lab2Version(value) {
   if (typeof value !== 'string' || !/^\d+\.\d+\.[01]$/.test(value)) return null;
   const version = value.split('.').map(Number);
@@ -267,7 +274,18 @@ function drawConversation() {
     if (result.defense_blocked) lines.append(node('li', '', result.defense_reason || 'The selected defenses blocked this attempt.'));
     else lines.append(node('li', '', result.triggered ? 'Exploit verified.' : 'No exploit detected.'));
     if (metadata().has_kb) {
-      lines.append(node('li', '', result.kb_used ? `${result.sources.length} synced document(s) were retrieved.` : 'No knowledge-base documents were used.'));
+      if (state.current === 3) {
+        const sources = result.sources || [];
+        const count = sources.length;
+        const own = sources.filter(source => source.injected === true).length;
+        const snapshot = result.retrieval_snapshot_current;
+        const version = !count ? '' : snapshot === true ? ' Current synced snapshot.'
+          : snapshot === false ? ' Earlier synced snapshot.' : ' Snapshot version unavailable.';
+        $('attempt-result').append(node('p', 'lab3-retrieval-summary',
+          `Last reply retrieved ${count} document${count === 1 ? '' : 's'} (${own ? `${own} of yours` : 'none of yours'}).${version}`));
+      } else {
+        lines.append(node('li', '', result.kb_used ? `${result.sources.length} synced document(s) were retrieved.` : 'No knowledge-base documents were used.'));
+      }
       for (const source of result.sources) lines.append(node('li', '', `${source.title} · ${source.injected ? 'Your document' : 'Original reference'}`));
     }
     details.append(lines);
@@ -289,11 +307,12 @@ function drawHints() {
 function drawFlag() {
   const record = currentLab();
   const hideSubmission = record.completed && state.current !== 1;
+  const captured = record.exploited || (state.current === 3 && record.completed === true && Boolean(record.flag));
   $('flag-button').textContent = record.completed ? '✓ Completed' : record.exploited ? 'Flag captured' : 'Submit flag';
   $('flag-button').className = `tool-button${record.exploited ? ' captured' : ''}`;
   $('flag-heading').textContent = record.completed ? 'Lab complete.' : record.exploited ? 'You found the flag.' : 'Find it. Submit it.';
   $('flag-instructions').textContent = record.completed ? `${metadata().points} points earned. You can keep experimenting or move to the next lab.` : record.exploited ? 'The server verified the exploit. Use the captured flag below to claim your points.' : 'Trigger the exploit in chat to reveal this lab’s flag. Submit it here to earn the points.';
-  $('captured-panel').hidden = !record.exploited;
+  $('captured-panel').hidden = !captured;
   $('captured-flag').textContent = record.flag || '';
   $('use-captured-flag').hidden = hideSubmission;
   $('flag-form').hidden = hideSubmission;
@@ -304,6 +323,78 @@ function drawFlag() {
   $('flag-feedback').hidden = !feedback;
   $('flag-feedback').textContent = feedback?.message || '';
   $('flag-feedback').className = `flag-feedback${feedback?.error ? ' error-text' : ''}`;
+  $('lab3-completion-explanation').hidden = !(state.current === 3 && record.completed === true);
+}
+
+function lab3DocumentStatus(id, record = state.labs['3'], draft = state.editors.get(3)) {
+  const saved = record.documents.find(doc => doc.id === id);
+  const sync = record.document_sync?.[id];
+  const editing = draft && (draft.id === id || (!id && !draft.id));
+  if (editing && (!saved || draft.title !== saved.title || draft.content !== saved.content)) {
+    return { state: 'unsaved', label: 'Unsaved changes', detail: sync?.synced
+      ? 'Save, then sync to update retrieval. The earlier synced version is unchanged.'
+      : 'Save this document, then sync and enable it for retrieval.' };
+  }
+  if (!sync) return { state: saved ? 'unknown' : 'not_saved', label: saved ? 'Sync status unavailable' : 'Not saved',
+    detail: saved ? 'Reload to check synchronization.' : 'Review and save the bulletin, then sync and enable it.' };
+  if (!sync.synced) return { state: 'saved_unsynced', label: 'Saved, awaiting synchronization',
+    detail: `Saving did not update retrieval.${record.use_kb ? '' : ' Retrieval is disabled.'} Sync and enable this document.` };
+  if (!record.use_kb) return { state: 'disabled', label: 'Retrieval disabled', detail: sync.matches_saved
+    ? 'This version is synced. Enable retrieval to make it available.'
+    : sync.synced ? 'The earlier synced version is retained. Saved changes still need synchronization.'
+      : 'This document is saved but not synced. Sync and enable it for retrieval.' };
+  if (!sync.saved && sync.synced) return { state: 'saved_newer', label: 'Saved removal · Sync needed',
+    detail: 'The older synced version is still available for retrieval until you sync the removal.' };
+  if (!sync.matches_saved) return { state: 'saved_newer', label: 'Saved changes · Sync needed',
+    detail: 'The older synced version is still available for retrieval. Sync and enable to update it.' };
+  return { state: 'synced', label: 'Synced · Retrieval enabled', detail: 'The saved version is in the active retrieval snapshot.' };
+}
+
+function lab3StatusBadge(id) {
+  const badge = node('span', 'document-tag lab3-document-status');
+  badge.dataset.documentId = id || '';
+  return badge;
+}
+
+function lab3KnowledgeNotice(record = state.labs['3']) {
+  const draft = state.editors.get(3);
+  if (draft && lab3DocumentStatus(draft.id, record, draft).state === 'unsaved') {
+    return 'Unsaved changes stay in the editor. Save, then sync to update retrieval.';
+  }
+  return state.kbNotices.get(3) || (record.kb_revision !== record.synced_revision
+    ? `Saved changes need synchronization.${record.use_kb ? ' Retrieval still uses the earlier synced snapshot.' : ' Retrieval is disabled.'}`
+    : record.use_kb ? 'The synced snapshot is active for retrieval.' : 'Retrieval is disabled. The synced snapshot is retained.');
+}
+
+function refreshLab3DocumentStatuses() {
+  let editorStatus = $('lab3-editor-status');
+  if (state.current !== 3) { editorStatus?.remove(); return; }
+  for (const badge of document.querySelectorAll('.lab3-document-status')) {
+    const status = lab3DocumentStatus(badge.dataset.documentId || undefined);
+    badge.textContent = status.label;
+    badge.dataset.state = status.state;
+    badge.title = status.detail;
+    badge.setAttribute('aria-label', `${status.label}. ${status.detail}`);
+  }
+  const draft = state.editors.get(3);
+  if (draft) {
+    if (!editorStatus) {
+      editorStatus = node('p', 'lab3-sync-note');
+      editorStatus.id = 'lab3-editor-status';
+      editorStatus.setAttribute('role', 'status');
+      $('document-editor').prepend(editorStatus);
+    }
+    const status = lab3DocumentStatus(draft.id);
+    editorStatus.textContent = `${status.label}. ${status.detail}`;
+  } else { editorStatus?.remove(); }
+  $('kb-notice').textContent = lab3KnowledgeNotice();
+  const unsaved = draft && lab3DocumentStatus(draft.id).state === 'unsaved';
+  const record = state.labs['3'];
+  $('kb-status').textContent = unsaved ? 'Unsaved changes' : record.kb_revision !== record.synced_revision
+    ? 'Saved changes need sync' : record.use_kb ? 'Synced · Retrieval enabled' : 'Synced · Retrieval disabled';
+  $('kb-status').className = `kb-status${unsaved || record.kb_revision !== record.synced_revision ? ' unsynced' : ''}`;
+  $('knowledge-button').textContent = unsaved ? 'Knowledge base · Unsaved' : record.kb_revision !== record.synced_revision
+    ? 'Knowledge base · Sync needed' : record.use_kb ? 'Knowledge base · On' : 'Knowledge base · Off';
 }
 
 function drawKnowledge() {
@@ -311,7 +402,7 @@ function drawKnowledge() {
   $('knowledge-button').hidden = !metadata().has_kb;
   $('knowledge-button').textContent = record.kb_revision !== record.synced_revision ? 'Knowledge base · Unsynced' : record.use_kb ? 'Knowledge base · On' : 'Knowledge base';
   $('knowledge-panel').hidden = !metadata().has_kb;
-  if (!metadata().has_kb) return;
+  if (!metadata().has_kb) { if (state.current !== 3) $('lab3-editor-status')?.remove(); return; }
   const changed = record.kb_revision !== record.synced_revision;
   $('kb-status').textContent = changed ? 'Changes waiting to sync' : 'Up to date';
   $('kb-status').className = `kb-status${changed ? ' unsynced' : ''}`;
@@ -321,6 +412,7 @@ function drawKnowledge() {
     const row = node('div', 'document-row');
     const heading = node('div');
     heading.append(node('h3', '', doc.title), node('span', 'document-tag', doc.is_user_injected ? 'Your document' : 'Original'));
+    if (state.current === 3) { heading.className = 'lab3-document-heading'; heading.append(lab3StatusBadge(doc.id)); }
     row.append(heading, node('small', '', `${doc.content.length.toLocaleString()} characters`));
     const actions = node('div', 'document-actions');
     const edit = node('button', '', 'Edit');
@@ -336,6 +428,7 @@ function drawKnowledge() {
   $('editor-placeholder').hidden = Boolean(draft);
   if (draft) { $('document-title').value = draft.title; $('document-content').value = draft.content; }
   $('kb-notice').textContent = state.kbNotices.get(state.current) || (changed ? 'Saved edits are waiting to be synced.' : record.use_kb ? 'Synced documents are enabled for the next message.' : 'The original references are synced. Retrieval is currently off.');
+  refreshLab3DocumentStatuses();
 }
 
 function updateControls() {
@@ -428,7 +521,10 @@ function drawWorkspace() {
     const inbox = node('div', 'document-list');
     const card = node('article', 'document-row');
     const heading = node('div');
-    heading.append(node('h3', '', 'Contractor Service Bulletin'), node('span', 'document-tag', 'Not indexed'));
+    const bulletin = currentLab().documents.find(doc => doc.id === 'sb-b01-047') || currentLab().documents.find(doc =>
+      /\bSB-B01-047\b/i.test(doc.title) || /^Document reference:\s*SB-B01-047\s*$/im.test(doc.content));
+    heading.className = 'lab3-document-heading';
+    heading.append(node('h3', '', 'Contractor Service Bulletin'), lab3StatusBadge(bulletin?.id || 'sb-b01-047'));
     const details = node('div', 'scenario-summary');
     for (const [label, value] of [['Reference', 'SB-B01-047'], ['Equipment', 'Boiler B-01'], ['Sensor', 'PT-B01'], ['Source', 'External service contractor']]) {
       details.append(node('div', '', `${label}: ${value}`));
@@ -581,6 +677,9 @@ function drawLab() {
   $('chat-context').textContent = state.current === 1 ? 'Boiler monitoring assistant' : ['Vulnerable assistant', 'Hardened assistant', 'Guardrailed assistant'][record.defense_level || 0];
   $('lab-status').textContent = record.completed ? '✓ Completed' : record.exploited ? 'Flag captured' : record.messages.length ? 'In progress' : 'Ready to try';
   $('lab-status').className = `lab-status${record.completed ? ' complete' : record.exploited ? ' captured' : ''}`;
+  $('restart-lab').title = state.current === 3
+    ? 'Clear this lab’s chat and documents. Earned completion and points stay saved.'
+    : 'Clear this lab’s chat, documents, flag, and points';
   $('prompt').value = state.promptDrafts.get(state.current) || '';
   window.LabScenario?.render(state.current);
   drawLab2Progress();
@@ -603,6 +702,7 @@ function navigate(id, push = true) {
 
 function acceptResponse(id, response) {
   if (id === 2 && staleLab2Response(state.labs['2'], response.lab)) return false;
+  if (id === 3 && staleLab3Response(state.labs['3'], response.lab)) return false;
   const justCaptured = !state.labs[String(id)].exploited && response.lab.exploited;
   state.labs[String(id)] = id === 1 ? newestBoilerState(response.lab) : response.lab;
   state.summary = response.summary;
@@ -655,7 +755,14 @@ async function updateKnowledge({ documents, sync = false, useKB, notice, clearEd
     const record = state.labs[String(id)];
     const response = await api(`/api/labs/${id}/kb`, { documents: documents || record.documents, sync, use_kb: useKB === undefined ? record.use_kb : useKB });
     if (clearEditor) state.editors.delete(id);
-    if (notice) state.kbNotices.set(id, notice);
+    if (id === 3) state.kbNotices.set(id, sync
+      ? 'Synced snapshot active. Saved document versions are available for retrieval.'
+      : clearEditor ? response.lab.use_kb
+        ? 'Document saved. Retrieval still uses the earlier synced snapshot. Sync and enable to update it.'
+        : 'Document saved. Retrieval is disabled. Sync and enable to activate the saved version.'
+      : useKB !== undefined ? response.lab.use_kb ? 'Retrieval enabled for the synced snapshot.' : 'Retrieval disabled. The synced snapshot is retained.'
+      : 'Document list saved. Sync and enable to update retrieval.');
+    else if (notice) state.kbNotices.set(id, notice);
     acceptResponse(id, response);
   } catch (error) {
     if (state.current === id) $('use-kb').checked = currentLab().use_kb;
@@ -669,6 +776,7 @@ async function submitFlag(event) {
   if (state.flagBusy.has(id)) return;
   const flag = $('flag-input').value.trim();
   const requestVersion = id === 2 ? state.labs['2']?._extractionVersion : null;
+  const requestLab3 = id === 3 ? state.labs['3'] : null;
   state.flagDrafts.set(id, flag);
   state.flagBusy.add(id); updateControls();
   try {
@@ -682,6 +790,15 @@ async function submitFlag(event) {
       state.flagFeedback.set(id, { message: newlyAwarded
         ? `+${metadata(id).points} points. Well played.`
         : 'Lab 2 is already complete. Points were already awarded.' });
+    } else if (id === 3) {
+      if (staleLab3Response(state.labs['3'], response.lab)) return;
+      if (response.lab.completed !== true) throw new Error('The server did not confirm Lab 3 completion. Please refresh and try again.');
+      const newlyAwarded = response.flag_submission?.newly_completed === true
+        && response.flag_submission.points_awarded === metadata(id).points
+        && !state.labs['3'].completed;
+      state.flagFeedback.set(id, { message: newlyAwarded
+        ? `+${metadata(id).points} points. Well played.`
+        : 'Lab 3 is already complete. Points were already awarded.' });
     } else {
       state.flagFeedback.set(id, { message: id === 1 && state.labs['1'].completed
         ? 'Flag accepted. Lab 1 is complete; points were already awarded.'
@@ -690,6 +807,8 @@ async function submitFlag(event) {
     acceptResponse(id, response);
   } catch (error) {
     if (staleLab2Request(id, requestVersion)) return;
+    if (id === 3 && (state.labs['3'].attempt !== requestLab3.attempt
+        || (state.labs['3'].completed === true && requestLab3.completed !== true))) return;
     state.flagFeedback.set(id, { message: error.message, error: true });
     if (state.current === id) drawFlag();
   } finally { state.flagBusy.delete(id); updateControls(); }
@@ -723,6 +842,8 @@ async function changeDefense() {
   if (level === (record.defense_level || 0)) return;
   const confirmation = id === 2
     ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current extraction progress. Your captured flag and earned points stay saved. Continue?'
+    : id === 3
+    ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current verification. Earned completion and points stay saved. Your knowledge base stays saved. Continue?'
     : 'Changing difficulty starts a new attempt and clears this lab’s chat, captured flag, and points. Your knowledge base stays saved. Continue?';
   if ((record.messages.length || record.completed || record.exploited) && !window.confirm(confirmation)) {
     $('defense-select').value = String(record.defense_level || 0);
@@ -793,8 +914,14 @@ async function start() {
     for (const dialog of document.querySelectorAll('.tool-dialog')) dialog.addEventListener('click', (event) => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close(); } });
     $('new-document').addEventListener('click', () => { state.editors.set(state.current, { title: '', content: '' }); drawKnowledge(); updateControls(); $('document-title').focus(); });
     $('cancel-document').addEventListener('click', () => { state.editors.delete(state.current); drawKnowledge(); updateControls(); });
-    $('document-title').addEventListener('input', () => { state.editors.get(state.current).title = $('document-title').value; });
-    $('document-content').addEventListener('input', () => { state.editors.get(state.current).content = $('document-content').value; });
+    $('document-title').addEventListener('input', () => {
+      state.editors.get(state.current).title = $('document-title').value;
+      if (state.current === 3) { state.kbNotices.delete(3); refreshLab3DocumentStatuses(); }
+    });
+    $('document-content').addEventListener('input', () => {
+      state.editors.get(state.current).content = $('document-content').value;
+      if (state.current === 3) { state.kbNotices.delete(3); refreshLab3DocumentStatuses(); }
+    });
     $('document-editor').addEventListener('submit', (event) => {
       event.preventDefault();
       const draft = state.editors.get(state.current);

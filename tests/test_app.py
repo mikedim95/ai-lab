@@ -158,7 +158,26 @@ class LabTests(unittest.TestCase):
     def chat(self, lab_id, message="Hello", **extra):
         if lab_id == 2:
             return self.native_lab2_chat(message, **extra)
+        if lab_id == 3:
+            return self.native_lab3_chat(message, **extra)
         return self.request(f"/api/labs/{lab_id}/chat", {"message": message, **extra})
+
+    def native_lab3_chat(self, message, **extra):
+        """Exercise production generation with mocked transport and temporary stores."""
+        def ollama(request, timeout):
+            self.assertEqual(request.full_url, server.OLLAMA_URL + "/api/chat")
+            self.calls.append(json.loads(request.data)["messages"])
+            if self.failure:
+                raise self.failure
+            return io.BytesIO(json.dumps({"message": {"content": self.reply}}).encode())
+
+        previous_model = self.app.model
+        try:
+            self.app.model = server.local_model
+            with patch("server.urllib.request.urlopen", side_effect=ollama):
+                return self.request("/api/labs/3/chat", {"message": message, **extra})
+        finally:
+            self.app.model = previous_model
 
     def native_lab2_chat(self, message, **extra):
         """Mock only Ollama transport in an isolated test database.
@@ -2021,7 +2040,7 @@ class LabTests(unittest.TestCase):
         reopened.store.save(self.sid(), saved)
         self.assertEqual(self.request()[1]["labs"]["2"]["defense_level"], 0)
 
-    def test_defense_change_invalidates_flags_and_preserves_documents(self):
+    def test_lab3_defense_change_preserves_completion_and_resets_current_verification(self):
         self.poison(3)
         self.reply = LAB3_ADOPTED_REPLY
         _, earned = self.chat(3, LAB3_QUESTION)
@@ -2029,20 +2048,26 @@ class LabTests(unittest.TestCase):
         self.assertIsNotNone(old_flag)
         self.request("/api/labs/3/flag", {"flag": old_flag})
         _, changed = self.request("/api/labs/3/defense", {"level": 1})
-        self.assertEqual(changed["summary"]["score"], 0)
+        self.assertEqual(changed["summary"]["score"], 150)
         self.assertFalse(changed["lab"]["exploited"])
-        self.assertFalse(changed["lab"]["completed"])
+        self.assertTrue(changed["lab"]["completed"])
+        self.assertEqual(changed["lab"]["flag"], old_flag)
         self.assertEqual(changed["lab"]["messages"], [])
         self.assertEqual(changed["lab"]["documents"], earned["lab"]["documents"])
         self.assertTrue(changed["lab"]["use_kb"])
-        self.assertEqual(self.request("/api/labs/3/flag", {"flag": old_flag})[0], 403)
+        status, repeated = self.request("/api/labs/3/flag", {"flag": old_flag})
+        self.assertEqual(status, 200)
+        self.assertEqual(repeated["flag_submission"]["points_awarded"], 0)
         _, again = self.chat(3, LAB3_QUESTION)
-        self.assertNotEqual(again["lab"]["flag"], old_flag)
+        self.assertEqual(again["lab"]["flag"], old_flag)
         _, same = self.request("/api/labs/3/defense", {"level": 1})
         self.assertEqual(same["lab"]["messages"], again["lab"]["messages"])
         self.assertEqual(same["lab"]["flag"], again["lab"]["flag"])
         _, reset = self.request("/api/labs/3/reset", {})
         self.assertEqual(reset["lab"]["defense_level"], 1)
+        self.assertTrue(reset["lab"]["completed"])
+        self.assertFalse(reset["lab"]["exploited"])
+        self.assertEqual(reset["summary"]["score"], 150)
 
     def test_defense_input_guards_use_stricter_threshold_at_level_two(self):
         self.request("/api/labs/1/defense", {"level": 1})

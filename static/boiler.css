@@ -54,6 +54,17 @@
 .scenario-section .extraction-progress-status { color: #365a45; font-size: 10px; line-height: 1.6; }
 .scenario-section .extraction-progress-note { margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .extraction-progress.complete { border-color: #a5c4a8; background: #f0f5ed; }
+.lab3-document-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.lab3-document-heading h3 { min-width: 0; overflow-wrap: anywhere; }
+.lab3-document-status { max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
+.lab3-document-status[data-state="unsaved"], .lab3-document-status[data-state="saved_unsynced"], .lab3-document-status[data-state="saved_newer"] { color: #856426; background: #fff5df; }
+.lab3-document-status[data-state="synced"] { color: #39613c; background: #eff6ec; }
+.lab3-document-status[data-state="disabled"], .lab3-document-status[data-state="not_saved"], .lab3-document-status[data-state="unknown"] { color: var(--muted); background: #f0f2ed; }
+.lab3-sync-note, .lab3-retrieval-summary { font-size: 11px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+#lab3-editor-status { margin: 0 0 8px; }
+.attempt-result .lab3-retrieval-summary { margin-top: 4px; }
+.scenario-section .lab3-workflow { margin: 12px 0 0; padding-left: 17px; color: var(--muted); }
+.scenario-section .lab3-workflow li { padding: 1px 0; }
 .lab-tools { display: flex; flex-direction: column; }
 .workspace-heading { position: sticky; top: 0; z-index: 1; background: #fff; }
 .workspace-content { min-height: 0; flex: 1; }
