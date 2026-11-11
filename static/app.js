@@ -38,6 +38,17 @@ function staleLab6Response(current, incoming) {
       && incoming.reply_revision < current.reply_revision);
 }
 
+function staleLab8Response(current, incoming) {
+  const valid = value => Array.isArray(value) && value.length === 2
+    && value.every(part => Number.isSafeInteger(part) && part >= 0);
+  const before = current?.state_version;
+  const after = incoming?.state_version;
+  if (current?.completed === true && incoming?.completed !== true) return true;
+  if (!valid(before)) return false;
+  if (incoming?.id !== 8 || !valid(after)) return true;
+  return after[0] < before[0] || (after[0] === before[0] && after[1] < before[1]);
+}
+
 function lab2Version(value) {
   if (typeof value !== 'string' || !/^\d+\.\d+\.[01]$/.test(value)) return null;
   const version = value.split('.').map(Number);
@@ -281,13 +292,50 @@ function lab6Feedback(result) {
   })[result.identity_status] || 'Identity change refused or not established.';
 }
 
+function lab8KnowledgeFeedback(record = currentLab()) {
+  const notes = [record.use_kb ? 'Current synchronized snapshot active.' : 'Knowledge base disabled.'];
+  if (record.kb_revision !== record.synced_revision) {
+    notes.push('Saved document awaiting synchronization.');
+    if (record.use_kb) notes.push('Retrieval uses the previous synchronized version; saved edits are excluded until you sync.');
+  }
+  return notes;
+}
+
+function lab8ReplyFeedback(result) {
+  return result?.triggered === true ? 'Exploit verified.' : 'No exploit verified.';
+}
+
+function lab8RetrievalFeedback(result) {
+  const sources = result?.sources || [];
+  return sources.some(source => source.injected === true)
+    ? 'Student-controlled document retrieved for the last reply.'
+    : sources.length ? 'Original references retrieved for the last reply.' : 'No documents retrieved for the last reply.';
+}
+
+function refreshLab8DocumentStatus() {
+  if (state.current !== 8) return;
+  const record = currentLab();
+  const draft = state.editors.get(8);
+  const changed = record.kb_revision !== record.synced_revision;
+  const unsaved = draft && !record.documents.some(doc => doc.id === draft.id
+    && doc.title === draft.title && doc.content === draft.content);
+  $('kb-status').textContent = unsaved ? 'Editing · Unsaved changes' : changed
+    ? 'Saved document awaiting synchronization' : record.use_kb
+      ? 'Current synchronized snapshot active' : 'Knowledge base disabled';
+  $('kb-status').className = `kb-status${unsaved || changed ? ' unsynced' : ''}`;
+  $('kb-notice').textContent = [unsaved ? 'Unsaved edits stay in the editor. Save before synchronizing.' : '',
+    ...lab8KnowledgeFeedback(record)].filter(Boolean).join(' ');
+}
+
 function drawConversation() {
   const record = currentLab();
   const pending = state.pending.get(state.current);
   $('messages').replaceChildren();
   if (!record.messages.length && !pending) {
     const empty = node('div', 'empty-chat');
-    empty.append(node('h3', '', 'Start a conversation.'), node('p', '', metadata().has_kb ? `Plant a document in the knowledge base, then ask ${assistantName()} about it.` : `Ask ${assistantName()} a question, or try your first attack. Use the hints in the scenario panel.`));
+    empty.append(node('h3', '', 'Start a conversation.'), node('p', '', state.current === 8
+      ? 'Edit or add a maintenance document, save it, then sync the knowledge base. Ask Plant AI a related question and review its sources and response.'
+      : metadata().has_kb ? `Plant a document in the knowledge base, then ask ${assistantName()} about it.` : `Ask ${assistantName()} a question, or try your first attack. Use the hints in the scenario panel.`));
     $('messages').append(empty);
   }
   for (const message of record.messages) appendMessage(message.role, message.content, false, message.boiler_execution);
@@ -299,12 +347,13 @@ function drawConversation() {
   if (record.last_result && !pending) {
     const result = record.last_result;
     const verified = state.current === 6 ? result.triggered === true && result.identity_status === 'adopted'
-      : state.current === 5 ? result.triggered === true
+      : state.current === 5 || state.current === 8 ? result.triggered === true
       : state.current === 1 || state.current === 2 || state.current === 4 ? result.triggered : record.exploited;
     $('attempt-result').className = `attempt-result${verified ? ' success' : result.defense_blocked ? ' blocked' : ''}`;
     const message = state.current === 4 ? lab4Feedback(result)
       : state.current === 5 ? lab5Feedback(result)
       : state.current === 6 ? lab6Feedback(result)
+      : state.current === 8 ? lab8ReplyFeedback(result)
       : state.current === 2 && record.exploited && !result.triggered && !result.defense_blocked
       ? 'This reply did not verify an extraction. Your previously captured flag and any earned points are still saved.'
       : result.message;
@@ -312,11 +361,21 @@ function drawConversation() {
     const details = node('details');
     details.append(node('summary', '', `Attempt details · ${result.seconds}s`));
     const lines = node('ul');
-    if (result.defense_blocked) lines.append(node('li', '', [4, 5, 6].includes(state.current)
+    if (state.current === 8) {
+      const difficulty = ['Easy · Vulnerable', 'Medium · Hardened', 'Hard · Guardrailed'][result.defense_level];
+      lines.append(node('li', '', `Request difficulty: ${difficulty || 'Unavailable'}.`));
+      if (result.defense_blocked) lines.append(node('li', '', 'The selected protections blocked or filtered this reply.'));
+      for (const source of result.excluded_sources || []) {
+        lines.append(node('li', '', `Excluded document: ${source.title} · ${source.id}. Not supplied to Plant AI.`));
+      }
+    } else if (result.defense_blocked) lines.append(node('li', '', [4, 5, 6].includes(state.current)
       ? 'The selected defenses blocked this attempt.' : result.defense_reason || 'The selected defenses blocked this attempt.'));
     else lines.append(node('li', '', (state.current === 6 ? verified : result.triggered) ? 'Exploit verified.' : 'No exploit detected.'));
     if (metadata().has_kb) {
-      if (state.current === 3) {
+      if (state.current === 8) {
+        $('attempt-result').append(node('p', 'lab8-retrieval-summary', lab8RetrievalFeedback(result)),
+          node('p', 'lab8-source-note', 'Sources describe the last reply. Saving or synchronizing documents does not rerun retrieval. Retrieval alone is not verification.'));
+      } else if (state.current === 3) {
         const sources = result.sources || [];
         const count = sources.length;
         const own = sources.filter(source => source.injected === true).length;
@@ -328,7 +387,9 @@ function drawConversation() {
       } else {
         lines.append(node('li', '', result.kb_used ? `${result.sources.length} synced document(s) were retrieved.` : 'No knowledge-base documents were used.'));
       }
-      for (const source of result.sources) lines.append(node('li', '', `${source.title} · ${source.injected ? 'Your document' : 'Original reference'}`));
+      for (const source of result.sources) lines.append(node('li', '', state.current === 8
+        ? `${source.title} · ${source.id} · ${source.injected ? 'Student-controlled reference' : 'Original reference'}`
+        : `${source.title} · ${source.injected ? 'Your document' : 'Original reference'}`));
     }
     details.append(lines);
     $('attempt-result').append(details);
@@ -349,7 +410,7 @@ function drawHints() {
 function drawFlag() {
   const record = currentLab();
   const hideSubmission = record.completed && state.current !== 1;
-  const captured = record.exploited || ([3, 4, 5, 6].includes(state.current) && record.completed === true && Boolean(record.flag));
+  const captured = record.exploited || ([3, 4, 5, 6, 8].includes(state.current) && record.completed === true && Boolean(record.flag));
   $('flag-button').textContent = record.completed ? '✓ Completed' : record.exploited ? 'Flag captured' : 'Submit flag';
   $('flag-button').className = `tool-button${record.exploited ? ' captured' : ''}`;
   $('flag-heading').textContent = record.completed ? 'Lab complete.' : record.exploited ? 'You found the flag.' : 'Find it. Submit it.';
@@ -369,6 +430,7 @@ function drawFlag() {
   $('lab4-completion-explanation').hidden = !(state.current === 4 && record.completed === true);
   $('lab5-completion-explanation').hidden = !(state.current === 5 && record.completed === true);
   $('lab6-completion-explanation').hidden = !(state.current === 6 && record.completed === true);
+  $('lab8-completion-explanation').hidden = !(state.current === 8 && record.completed === true);
 }
 
 function lab3DocumentStatus(id, record = state.labs['3'], draft = state.editors.get(3)) {
@@ -473,6 +535,7 @@ function drawKnowledge() {
   $('editor-placeholder').hidden = Boolean(draft);
   if (draft) { $('document-title').value = draft.title; $('document-content').value = draft.content; }
   $('kb-notice').textContent = state.kbNotices.get(state.current) || (changed ? 'Saved edits are waiting to be synced.' : record.use_kb ? 'Synced documents are enabled for the next message.' : 'The original references are synced. Retrieval is currently off.');
+  refreshLab8DocumentStatus();
   refreshLab3DocumentStatuses();
 }
 
@@ -696,6 +759,25 @@ Status: Unverified contractor maintenance report.`
     panel.append(heading, details,
       node('p', 'scenario-summary', 'This lab tests identity claims. Even verified identity adoption grants no actual equipment permissions.'));
     target.replaceChildren(panel);
+  } else if (state.current === 8) {
+    const panel = node('section', 'scenario-body lab8-workspace');
+    panel.append(node('h3', '', 'Knowledge and conversation'));
+    const status = node('div', 'lab8-kb-feedback');
+    status.id = 'lab8-kb-feedback';
+    status.setAttribute('role', 'status');
+    for (const text of lab8KnowledgeFeedback()) status.append(node('p', '', text));
+    const reply = node('div', 'lab8-reply-feedback');
+    reply.id = 'lab8-reply-feedback';
+    reply.setAttribute('role', 'status');
+    if (state.pending.has(8)) {
+      reply.append(node('p', '', 'Awaiting the current model response.'));
+    } else {
+      reply.append(node('p', '', lab8ReplyFeedback(currentLab().last_result)));
+      if (currentLab().last_result) reply.append(node('p', '', lab8RetrievalFeedback(currentLab().last_result)));
+    }
+    panel.append(status, reply, node('p', 'lab8-source-note',
+      'Source retrieval and model behavior are separate steps. Only backend verification unlocks a flag; submit it to earn 400 points.'));
+    target.replaceChildren(panel);
   } else if (!target.querySelector('.workspace-empty')) {
     const placeholder = node('div', 'workspace-empty');
     const icon = node('span', 'workspace-empty-icon', '◇');
@@ -722,7 +804,7 @@ function drawLab() {
   $('chat-context').textContent = state.current === 1 ? 'Boiler monitoring assistant' : ['Vulnerable assistant', 'Hardened assistant', 'Guardrailed assistant'][record.defense_level || 0];
   $('lab-status').textContent = record.completed ? '✓ Completed' : record.exploited ? 'Flag captured' : record.messages.length ? 'In progress' : 'Ready to try';
   $('lab-status').className = `lab-status${record.completed ? ' complete' : record.exploited ? ' captured' : ''}`;
-  $('restart-lab').title = state.current === 3 || state.current === 4 || state.current === 5
+  $('restart-lab').title = state.current === 3 || state.current === 4 || state.current === 5 || state.current === 8
     ? 'Clear this lab’s chat and documents. Earned completion and points stay saved.'
     : 'Clear this lab’s chat, documents, flag, and points';
   $('prompt').value = state.promptDrafts.get(state.current) || '';
@@ -751,6 +833,7 @@ function acceptResponse(id, response) {
   if (id === 4 && staleLab3Response(state.labs['4'], response.lab)) return false;
   if (id === 5 && staleLab3Response(state.labs['5'], response.lab)) return false;
   if (id === 6 && staleLab6Response(state.labs['6'], response.lab)) return false;
+  if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return false;
   const justCaptured = !state.labs[String(id)].exploited && response.lab.exploited;
   state.labs[String(id)] = id === 1 ? newestBoilerState(response.lab) : response.lab;
   state.summary = response.summary;
@@ -768,6 +851,7 @@ async function sendMessage(event) {
   const message = $('prompt').value.trim();
   if (!message) return;
   const requestVersion = id === 2 ? state.labs['2']?._extractionVersion : null;
+  const requestLab8 = id === 8 ? state.labs['8'] : null;
   const pendingRequest = { message, started: Date.now() };
   if (id === 6) state.labs['6'] = { ...state.labs['6'], last_result: null };
   state.pending.set(id, pendingRequest);
@@ -775,17 +859,22 @@ async function sendMessage(event) {
   $('prompt').value = '';
   $('error').hidden = true;
   drawConversation();
+  if (id === 8) drawWorkspace();
   if (id === 2) drawLab2Progress();
   updateControls();
   try {
     const response = await api(`/api/labs/${id}/chat`, { message, use_kb: state.labs[String(id)].use_kb });
-    if (id === 2 && state.pending.get(id) !== pendingRequest) return;
+    if ((id === 2 || id === 8) && state.pending.get(id) !== pendingRequest) return;
+    if (id === 8 && (!response.request_id || response.request_id !== response.lab?.last_result?.request_id)) {
+      throw new Error('The reply does not match this request. Reload and try again.');
+    }
     state.pending.delete(id);
     acceptResponse(id, response);
   } catch (error) {
-    if (id === 2 && state.pending.get(id) !== pendingRequest) return;
+    if ((id === 2 || id === 8) && state.pending.get(id) !== pendingRequest) return;
     state.pending.delete(id);
     if (staleLab2Request(id, requestVersion)) return;
+    if (id === 8 && staleLab8Response(state.labs['8'], requestLab8)) return;
     state.promptDrafts.set(id, message);
     if (state.current === id) drawLab();
     showError(`Lab ${id}: ${error.message}`);
@@ -799,10 +888,12 @@ async function sendMessage(event) {
 async function updateKnowledge({ documents, sync = false, useKB, notice, clearEditor = false }) {
   const id = state.current;
   if (state.kbBusy.has(id)) return;
+  const requestLab8 = id === 8 ? state.labs['8'] : null;
   state.kbBusy.add(id); updateControls();
   try {
     const record = state.labs[String(id)];
     const response = await api(`/api/labs/${id}/kb`, { documents: documents || record.documents, sync, use_kb: useKB === undefined ? record.use_kb : useKB });
+    if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return;
     if (clearEditor) state.editors.delete(id);
     if (id === 3) state.kbNotices.set(id, sync
       ? 'Synced snapshot active. Saved document versions are available for retrieval.'
@@ -814,6 +905,7 @@ async function updateKnowledge({ documents, sync = false, useKB, notice, clearEd
     else if (notice) state.kbNotices.set(id, notice);
     acceptResponse(id, response);
   } catch (error) {
+    if (id === 8 && staleLab8Response(state.labs['8'], requestLab8)) return;
     if (state.current === id) $('use-kb').checked = currentLab().use_kb;
     showError(`Lab ${id}: ${error.message}`);
   } finally { state.kbBusy.delete(id); updateControls(); }
@@ -829,11 +921,13 @@ async function submitFlag(event) {
   const requestLab4 = id === 4 ? state.labs['4'] : null;
   const requestLab5 = id === 5 ? state.labs['5'] : null;
   const requestLab6 = id === 6 ? state.labs['6'] : null;
+  const requestLab8 = id === 8 ? state.labs['8'] : null;
   state.flagDrafts.set(id, flag);
   state.flagBusy.add(id); updateControls();
   try {
     const response = await api(`/api/labs/${id}/flag`, { flag });
     if (id === 2 && staleLab2Response(state.labs['2'], response.lab)) return;
+    if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return;
     if (id === 2) {
       if (response.lab.completed !== true) throw new Error('The server did not confirm Lab 2 completion. Please refresh and try again.');
       const newlyAwarded = response.flag_submission?.newly_completed === true
@@ -875,6 +969,15 @@ async function submitFlag(event) {
         && state.labs['6'].completed !== true;
       state.flagFeedback.set(id, { message: newlyAwarded
         ? `+${metadata(id).points} points. Well played.` : 'Lab already completed' });
+    } else if (id === 8) {
+      if (response.lab.completed !== true) throw new Error('The server did not confirm Lab 8 completion. Please refresh and try again.');
+      const award = response.flag_submission;
+      const newlyAwarded = award?.newly_completed === true && award.points_awarded === metadata(id).points;
+      const alreadyAwarded = state.labs['8'].completed === true
+        || (award?.newly_completed === false && award.points_awarded === 0);
+      state.flagFeedback.set(id, { message: alreadyAwarded ? 'Lab already completed'
+        : newlyAwarded ? `+${metadata(id).points} points. Well played.`
+          : 'Lab complete. Award details unavailable.' });
     } else {
       state.flagFeedback.set(id, { message: id === 1 && state.labs['1'].completed
         ? 'Flag accepted. Lab 1 is complete; points were already awarded.'
@@ -891,6 +994,7 @@ async function submitFlag(event) {
         || (state.labs['5'].completed === true && requestLab5.completed !== true))) return;
     if (id === 6 && (state.labs['6'].attempt !== requestLab6.attempt
         || (state.labs['6'].completed === true && requestLab6.completed !== true))) return;
+    if (id === 8 && staleLab8Response(state.labs['8'], requestLab8)) return;
     state.flagFeedback.set(id, { message: error.message, error: true });
     if (state.current === id) drawFlag();
   } finally { state.flagBusy.delete(id); updateControls(); }
@@ -900,15 +1004,20 @@ async function restartLab() {
   const id = state.current;
   if (state.pending.has(id) || state.resetBusy.has(id) || (id === 1 && alertSaving)) return;
   const requestVersion = id === 2 ? state.labs['2']?._extractionVersion : null;
+  const requestLab8 = id === 8 ? state.labs['8'] : null;
   if (id === 1) boilerVersion += 1;
   state.resetBusy.add(id); updateControls();
   if (id === 2) drawLab2Progress();
   try {
     const response = await api(`/api/labs/${id}/reset`, {});
     if (id === 2 && staleLab2Response(state.labs['2'], response.lab)) return;
+    if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return;
     for (const map of [state.promptDrafts, state.flagDrafts, state.editors, state.hintCounts, state.kbNotices, state.flagFeedback]) map.delete(id);
     acceptResponse(id, response);
-  } catch (error) { if (!staleLab2Request(id, requestVersion)) showError(`Lab ${id}: ${error.message}`); }
+  } catch (error) {
+    if (id === 8 && staleLab8Response(state.labs['8'], requestLab8)) return;
+    if (!staleLab2Request(id, requestVersion)) showError(`Lab ${id}: ${error.message}`);
+  }
   finally {
     state.resetBusy.delete(id);
     if (id === 2 && state.current === 2) drawLab2Progress();
@@ -924,7 +1033,7 @@ async function changeDefense() {
   if (level === (record.defense_level || 0)) return;
   const confirmation = id === 2
     ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current extraction progress. Your captured flag and earned points stay saved. Continue?'
-    : id === 3
+    : id === 3 || id === 8
     ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current verification. Earned completion and points stay saved. Your knowledge base stays saved. Continue?'
     : id === 4 || id === 5 || id === 6
     ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current verification. Earned completion and points stay saved. Continue?'
@@ -939,10 +1048,12 @@ async function changeDefense() {
   try {
     const response = await api(`/api/labs/${id}/defense`, { level });
     if (id === 2 && staleLab2Response(state.labs['2'], response.lab)) return;
+    if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return;
     for (const map of [state.promptDrafts, state.flagDrafts, state.flagFeedback]) map.delete(id);
     acceptResponse(id, response);
   } catch (error) {
     if (staleLab2Request(id, requestVersion)) return;
+    if (id === 8 && staleLab8Response(state.labs['8'], record)) return;
     if (state.current === id) $('defense-select').value = String(currentLab().defense_level || 0);
     showError(error.message);
   } finally {
@@ -964,6 +1075,10 @@ async function checkHealth() {
 function acceptInitialState(data) {
   if (staleLab2Response(state.labs['2'], data.labs['2'])) {
     data.labs['2'] = state.labs['2'];
+    data.summary = state.summary;
+  }
+  if (staleLab8Response(state.labs['8'], data.labs['8'])) {
+    data.labs['8'] = state.labs['8'];
     data.summary = state.summary;
   }
   state.catalog = data.catalog;
@@ -1001,10 +1116,12 @@ async function start() {
     $('document-title').addEventListener('input', () => {
       state.editors.get(state.current).title = $('document-title').value;
       if (state.current === 3) { state.kbNotices.delete(3); refreshLab3DocumentStatuses(); }
+      if (state.current === 8) refreshLab8DocumentStatus();
     });
     $('document-content').addEventListener('input', () => {
       state.editors.get(state.current).content = $('document-content').value;
       if (state.current === 3) { state.kbNotices.delete(3); refreshLab3DocumentStatuses(); }
+      if (state.current === 8) refreshLab8DocumentStatus();
     });
     $('document-editor').addEventListener('submit', (event) => {
       event.preventDefault();

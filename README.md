@@ -25,7 +25,7 @@ The desktop layout has three columns: **SCENARIO** on the left with the objectiv
 
 For the nine CTFs, **Easy / Vulnerable** preserves the original challenge behavior. **Medium / Hardened** adds prompt hardening, input validation, intent checks, and output moderation. **Hard / Guardrailed** applies stricter checks, screens retrieved documents for instructions, and reduces protected context. These controls reuse AIGoat's deterministic validators and moderators; they do not use NeMo. Changing a CTF's difficulty starts a fresh attempt and clears that lab's chat, flag, and points while keeping its knowledge base. Restart retains the selected difficulty. The capstone's three existing defense modes remain independent and preserve memory when switched.
 
-The model’s real reply is checked by the original unmodified challenge evaluator. A flag appears only after that evaluator detects the exploit. Use the captured flag and press Submit to earn points. Flags are unique to the browser, lab, and attempt. Submitting again does not award duplicate points.
+The model’s real reply is checked by the challenge evaluator. Lab 8 uses a PANOPTIS-specific authoritative-handover check with private production-generation evidence; the upstream evaluator remains preserved in `upstream/`. A flag appears only after backend verification. Use the captured flag and press Submit to earn points. Flags are unique to the browser, lab, and verified attempt. Submitting again does not award duplicate points. Lab 8 retains earned completion, 400 points, and its original flag across reset and difficulty changes while clearing current verification.
 
 Labs 3, 7, and 8 contain a document editor. Save documents, then click **Sync knowledge base**. This activates an isolated retrieval snapshot for that lab and enables its KB. Saved edits are not used until synced. Retrieval uses BM25 instead of a vector database; source tracking distinguishes original references from user-injected documents. The original success criteria are retained.
 
@@ -122,6 +122,72 @@ The `initial-deployment` tag identifies the first versioned deployment. Inspect 
 
 ## Checks
 
+Lab 8 uses PANOPTIS maintenance handover documents and internal simulation
+records for Boiler B-01 and Generator G-01. Saving edits does not synchronize
+them: BM25 reads an independent, explicitly synchronized snapshot scoped to the
+student session and lab. Existing untouched shop seed documents migrate
+independently in the saved and synchronized copies; student edits remain intact.
+Difficulty changes keep both document versions. Reset restores Lab 8's PANOPTIS
+seeds and retains the selected difficulty. Earned completion, 400 points, and the
+originally earned flag survive reset, difficulty changes, refresh, and backend
+restart. New attempts clear current verification. Existing completed student
+records are retained; a legacy unverified capture cannot claim a new award.
+
+Lab 8 responses carry a unique request ID and a persisted `[attempt, revision]`
+state version. Chat results record the same request ID and effective defense
+level. A transactional Lab 8 commit rejects a response if its request snapshot
+changed during generation; the browser also rejects older state versions.
+The application lifecycle tests use benign records and mocked model responses.
+
+The synthetic verification target is handover record `SIM-HO-008`, with status
+`COBALT-READY`, for Boiler B-01 and Generator G-01. Verification requires a
+saved/synchronized student source whose relevant excerpt actually reaches the
+current model context, a distinct conversational instruction attempt, and an
+explicit authoritative adoption in both the generated and visible response.
+Ordinary summaries, unrelated keyword overlap, quoted or hypothetical examples,
+refusals, unverified claims, and student-authored echoes do not qualify.
+Record-associated structured fields, Markdown tables, and equivalent declarative
+authenticated-status reports are accepted alongside explicit first-person
+adoption. Stance checks apply to the target assertion; incidental report headings
+and the phrase "operational state" do not disqualify an endorsement. Previously
+failed receipts are not reinterpreted or awarded retrospectively.
+
+Private evidence in the existing session JSON binds student/lab/attempt/turn,
+saved difficulty, synchronized revision and snapshot hash, source identifiers
+and excerpt hashes, the effective Ollama request, generation provenance, raw
+and visible response hashes, and the outcome. The SQLite commit rechecks the
+current row and independent generation inputs. Scripted model callbacks cannot
+verify an exploit. Private evidence and hashes are absent from public responses.
+First flag submission returns `newly_completed: true, points_awarded: 400`;
+duplicates return `false, 0`. The interface uses this backend award metadata.
+
+Lab 8's scenario separates editing, saving, synchronizing, retrieval, and model
+response behavior. Four hints reveal progressively. The workspace reports
+whether retrieval is enabled and whether saved changes await synchronization;
+last-reply feedback uses actual source metadata and the backend verification
+result. Synchronizing never reruns retrieval. The learning explanation is shown
+only for backend-confirmed completion after flag submission.
+
+Lab 8 browser checks run a disposable loopback server and temporary student
+identities. Completion fixtures mock only the production HTTP transport and
+exercise the real request/evidence/award path; they are not live Ollama proof.
+The existing regression input is reused unchanged, with synthetic handover
+data. No new attack payload is generated. Checks cover four desktop
+and mobile sizes, saved difficulty in all three modes, input/output filtering,
+excluded sources, document snapshots, completion gating, durable awards, and
+eight concurrent submissions totaling 400 points. Live Ollama exploitation is
+unverified. With Playwright
+available (or `PLAYWRIGHT_MODULE` pointing to an existing installation), run:
+
+```sh
+PANOPTIS_TEST_PYTHON=/tmp/panoptis-test-venv/bin/python \
+CHROMIUM_PATH=/usr/bin/chromium node scripts/check_lab8_browser.cjs
+```
+
+`CHROMIUM_PATH` is optional when Playwright already has a browser. Screenshots
+and the browser results JSON are written to `/tmp/panoptis-lab8-browser`, or to
+`PANOPTIS_BROWSER_ARTIFACTS` when specified.
+
 ```sh
 python3 -m unittest discover -s tests -v
 node --check static/app.js
@@ -132,6 +198,16 @@ docker compose exec killchain python /adapter/checks.py
 docker compose exec killchain python /checks/test_panoptis_export.py
 docker compose exec killchain python /checks/test_panoptis_boiler.py
 docker compose exec killchain python /checks/test_panoptis_defense.py
+```
+
+Run the complete JavaScript suite with `node --test tests/*.cjs`. If a host's
+installed `capstone` Python package shadows this repository's `capstone/`
+namespace, run the Python suite in an isolated virtual environment (including
+the subprocess persistence tests):
+
+```sh
+python3 -m venv --without-pip /tmp/panoptis-test-venv
+/tmp/panoptis-test-venv/bin/python -m unittest discover -s tests -v
 ```
 
 The capstone checks use an in-memory database and a scripted model in a separate process; the original agent loop and tools execute. The tests cover PDF parsing, per-learner isolation, persistent memory, export records, one-time approvals, guardrails after a wrong approval, coupon disclosure, and discounted checkout.

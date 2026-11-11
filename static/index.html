@@ -58,6 +58,13 @@
     <p id="lab4-completion-explanation" class="dialog-description" hidden><strong>Vulnerability:</strong> Context Override / Prompt Injection.<br><strong>Entry point:</strong> Student chat.<br><strong>Trust boundary:</strong> Untrusted chat versus authenticated telemetry.<br><strong>Impact:</strong> Fabricated operational readings reported as verified.<br><strong>Defense:</strong> Trusted-source precedence and output validation.</p>
     <p id="lab5-completion-explanation" class="dialog-description" hidden><strong>Vulnerability:</strong> Multi-turn Prompt Injection.<br><strong>Entry point:</strong> Student conversation.<br><strong>Trust boundary:</strong> Untrusted conversation attempting to override higher-priority instructions.<br><strong>Impact:</strong> Restricted fictional maintenance information disclosure.<br><strong>Defense:</strong> Conversation-aware policy enforcement, least-privilege context, and output validation.</p>
     <p id="lab6-completion-explanation" class="dialog-description" hidden><strong>Vulnerability:</strong> Identity Hijacking.<br><strong>Entry point:</strong> Student chat.<br><strong>Trust boundary:</strong> Lower-trust conversation attempting to replace the model's assigned identity.<br><strong>Impact:</strong> Unauthorized persona adoption and potential role confusion.<br><strong>Defense:</strong> Immutable role assignments, explicit privilege boundaries, and output validation.<br>No real equipment permissions were granted.</p>
+    <section id="lab8-completion-explanation" class="dialog-description lab8-learning" aria-label="Lab 8 learning explanation" hidden>
+      <p><strong>Vulnerability:</strong> Chained RAG Poisoning and Prompt Injection.</p>
+      <p><strong>Entry points:</strong> Student-controlled knowledge-base content and student conversation.</p>
+      <p><strong>Trust boundary:</strong> Untrusted reference content must not become authoritative instructions.</p>
+      <p><strong>Impact:</strong> AI responses can be manipulated through multiple lower-trust input surfaces.</p>
+      <p><strong>Defenses:</strong> Document provenance, trusted-source precedence, separation of data and instructions, and output verification.</p>
+    </section>
   </dialog>
 </body>
 </html>

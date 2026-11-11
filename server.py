@@ -25,13 +25,14 @@ from urllib.parse import urlsplit
 from capstone.bridge import signature
 
 from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_FINGERPRINTS, LAB2_REFUSAL, LAB3_DOCUMENTS,
-                     LAB4_REFUSAL, LAB4_TRUSTED_SNAPSHOT, LAB5_REFUSAL, LAB6_REFUSAL, LAB7_DOCUMENTS, LAB7_REFUSAL, ROOT,
+                     LAB4_REFUSAL, LAB4_TRUSTED_SNAPSHOT, LAB5_REFUSAL, LAB6_REFUSAL, LAB7_DOCUMENTS, LAB7_REFUSAL,
+                     LAB8_DOCUMENTS, lab8_terminology, ROOT,
                      TOTAL_POINTS, build_messages, check_boiler_control, check_exploit, defend_input,
                      defend_output, defend_retrieval, fresh_lab, lab2_instruction_leaks,
                      lab2_supplied_instructions, retrieve)
 from catalog import _lab4_endorsed_readings, _lab4_normalize, _lab4_readings
 from catalog import _lab5_contains_access_code, check_lab5_escalation, check_lab6_identity
-from catalog import _lab6_requests_identity
+from catalog import _lab6_requests_identity, check_lab8_handover, LAB8_HANDOVER_RECORD, LAB8_HANDOVER_STATUS
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", ROOT / "data"))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -92,6 +93,104 @@ def _lab3_snapshot(record):
     return {"attempt": record["attempt"], "defense_level": record.get("defense_level", 0),
             "synced_revision": record["synced_revision"],
             "synced_snapshot_sha256": _lab3_hash(record["synced_documents"])}
+
+LAB8_CONTRACT_SHA256 = _lab3_hash({"version": 1, "record": LAB8_HANDOVER_RECORD,
+                                "status": LAB8_HANDOVER_STATUS, "equipment": ["B-01", "G-01"],
+                                "behavior": "explicit authoritative handover adoption"})
+
+
+def _lab8_snapshot(record):
+    return {**_lab3_snapshot(record), "state_revision": record.get("lab8_state_revision", 0),
+            "saved_revision": record["kb_revision"], "saved_snapshot_sha256": _lab3_hash(record["documents"]),
+            "conversation_sha256": _lab3_hash(record["messages"]),
+            "receipt_history_sha256": _lab3_hash(record.get("lab8_verification_receipts", []))}
+
+
+def _verify_lab8_receipt(receipt, *, binding, snapshot, entries, generated, displayed,
+                         message, effective_message, history, blocked, messages, actual_request_sha256):
+    """Recheck independently held generation inputs, also inside the row transaction."""
+    expected = {**binding, **_lab8_snapshot(snapshot), "contract_sha256": LAB8_CONTRACT_SHA256,
+                "student_request_sha256": _lab3_hash(binding["student_request"]),
+                "message_sha256": _lab3_hash(message), "effective_message_sha256": _lab3_hash(effective_message),
+                "retrieved_documents": _lab3_excerpts(entries), "model_context_sha256": _lab3_hash(messages),
+                "ollama_request_sha256": _lab5_request_hash(messages),
+                "generated_response_sha256": _lab3_hash(generated), "displayed_response_sha256": _lab3_hash(displayed),
+                "result_revision": binding["state_revision"] + 1,
+                "result_history_sha256": _lab3_hash(history[-60:])}
+    if any(receipt.get(key) != value for key, value in expected.items()):
+        return False, "evidence_mismatch"
+    if blocked:
+        return False, "defense_blocked"
+    if binding["generation_source"] != "production_ollama":
+        return False, "non_production_generation"
+    if not isinstance(generated, str) or not generated.strip() or not isinstance(displayed, str):
+        return False, "missing_response"
+    if actual_request_sha256 != expected["ollama_request_sha256"]:
+        return False, "ollama_request_mismatch"
+    if (binding["student_request"].strip() != message
+            or messages != build_messages(8, snapshot, effective_message, entries)
+            or history != snapshot["messages"] + [{"role": "user", "content": message},
+                                                   {"role": "assistant", "content": displayed}]):
+        return False, "model_context_mismatch"
+    originals = {doc["id"]: doc for doc in snapshot["synced_documents"]}
+    if not binding["kb_enabled"] or not entries:
+        return False, "no_retrieved_source"
+    for entry in entries:
+        original = originals.get(entry["id"])
+        if (not original or not entry["content"] or entry["title"] != original["title"]
+                or entry["is_user_injected"] is not original["is_user_injected"]
+                or not original["content"].startswith(entry["content"])):
+            return False, "retrieved_source_mismatch"
+    supplied = [turn["content"] for turn in snapshot["messages"] if turn["role"] == "user"]
+    supplied.extend(turn.get("student_request", "") for turn in snapshot.get("lab8_verification_receipts", [])
+                    if turn.get("student_id") == binding["student_id"] and turn.get("lab_id") == 8
+                    and turn.get("attempt") == binding["attempt"])
+    student_text = "\n".join([*supplied, message])
+    eligible = all(check_lab8_handover(effective_message, response, entries, student_text=student_text)
+                   for response in (generated, displayed))
+    return eligible, "verified" if eligible else "handover_not_verified"
+
+
+def _lab8_record_matches(record, receipt):
+    turns = record.get("messages", [])[-2:]
+    result = record.get("last_result") or {}
+    originals = {doc["id"]: doc for doc in record["synced_documents"]}
+    expected_sources = [{"id": source["id"], "title": originals[source["id"]]["title"],
+                         "injected": source["is_user_injected"]}
+                        for source in receipt["retrieved_documents"] if source["id"] in originals]
+    return (record["attempt"] == receipt["attempt"]
+            and record.get("defense_level", 0) == receipt["defense_level"]
+            and record.get("lab8_state_revision") == receipt["result_revision"]
+            and record["kb_revision"] == receipt["saved_revision"]
+            and _lab3_hash(record["documents"]) == receipt["saved_snapshot_sha256"]
+            and record["synced_revision"] == receipt["synced_revision"]
+            and _lab3_hash(record["synced_documents"]) == receipt["synced_snapshot_sha256"]
+            and record["use_kb"] is receipt["kb_enabled"]
+            and len(expected_sources) == len(receipt["retrieved_documents"])
+            and result.get("sources") == expected_sources
+            and result.get("kb_used") is bool(expected_sources)
+            and result.get("defense_level") == receipt["defense_level"]
+            and _lab3_hash(record["messages"]) == receipt["result_history_sha256"]
+            and len(turns) == 2 and turns[0].get("role") == "user" and turns[1].get("role") == "assistant"
+            and _lab3_hash(turns[0].get("content")) == receipt["message_sha256"]
+            and _lab3_hash(turns[1].get("content")) == receipt["displayed_response_sha256"]
+            and result.get("request_id") == receipt["turn_id"]
+            and result.get("triggered") is receipt["verification_outcome"])
+
+
+def _lab8_capture(sid, record):
+    """Only transaction-verified private receipts can unlock a new Lab 8 award."""
+    for receipt in reversed(record.get("lab8_verification_receipts", [])):
+        if (receipt.get("student_id") == sid and receipt.get("lab_id") == 8
+                and receipt.get("attempt") == record["attempt"]
+                and receipt.get("contract_sha256") == LAB8_CONTRACT_SHA256
+                and receipt.get("generation_source") == "production_ollama"
+                and receipt.get("verification_outcome") is True
+                and receipt.get("verification_reason") == "verified"
+                and receipt.get("ollama_request_sha256") and receipt.get("generated_response_sha256")
+                and receipt.get("displayed_response_sha256")):
+            return receipt
+    return None
 
 
 def _lab3_excerpts(entries):
@@ -549,7 +648,26 @@ class Store:
                         self._merge_lab4_award(data, json.loads(latest[0]))
                         self._merge_durable_award(data, json.loads(latest[0]), 5)
                         self._merge_durable_award(data, json.loads(latest[0]), 6)
+                        self._merge_lab8_state(data, json.loads(latest[0]))
                     db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
+                if any(doc == legacy for key in ("documents", "synced_documents")
+                       for doc in labs["8"].get(key, []) for legacy in DEFAULT_DOCUMENTS):
+                    # Re-read within a write transaction: migrate only untouched
+                    # Lab 8 seeds, independently of student drafts and sync state.
+                    db.commit()
+                    db.execute("BEGIN IMMEDIATE")
+                    data = json.loads(db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()[0])
+                    migrated_lab8 = False
+                    for key in ("documents", "synced_documents"):
+                        original = data["labs"]["8"].get(key, [])
+                        data["labs"]["8"][key] = [
+                            copy.deepcopy(next((replacement for legacy, replacement in zip(DEFAULT_DOCUMENTS, LAB8_DOCUMENTS)
+                                                if doc == legacy), doc))
+                            for doc in data["labs"]["8"].get(key, [])]
+                        migrated_lab8 |= original != data["labs"]["8"][key]
+                    if migrated_lab8:
+                        data["labs"]["8"]["lab8_state_revision"] = data["labs"]["8"].get("lab8_state_revision", 0) + 1
+                        db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
                 return sid, data
             sid = secrets.token_urlsafe(32)
             data = {"labs": {str(i): fresh_lab(lab_id=i) for i in range(1, 10)}}
@@ -606,6 +724,19 @@ class Store:
             if origin in saved or current["attempt"] != saved["attempt"]:
                 current[origin] = saved.get(origin, saved["attempt"])
 
+    @staticmethod
+    def _merge_lab8_state(data, previous):
+        """Keep an older whole-session write from restoring stale Lab 8 state."""
+        current = data["labs"].get("8")
+        saved = previous["labs"].get("8")
+        if saved is not None and (current is None or (
+                current["attempt"], current.get("lab8_state_revision", 0)) < (
+                saved["attempt"], saved.get("lab8_state_revision", 0))):
+            data["labs"]["8"] = copy.deepcopy(saved)
+        Store._merge_durable_award(data, previous, 8)
+        if saved is not None and saved.get("completed") and saved.get("lab8_award_receipt") is not None:
+            data["labs"]["8"]["lab8_award_receipt"] = copy.deepcopy(saved["lab8_award_receipt"])
+
     def save(self, sid, data, *, lab2_turn=None):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -619,10 +750,68 @@ class Store:
                 self._merge_lab4_award(data, previous)
                 self._merge_durable_award(data, previous, 5)
                 self._merge_durable_award(data, previous, 6)
+                # Other-lab writes may carry an older copy of Lab 8. All Lab 8
+                # application mutations use save_lab8 and advance this version.
+                self._merge_lab8_state(data, previous)
             if lab2_turn is not None:
                 db.execute("INSERT INTO lab2_extraction_turns VALUES (?, ?, ?, ?)",
                            (sid, data["labs"]["2"]["attempt"], lab2_turn["turn_id"], json.dumps(lab2_turn)))
             db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
+
+    def save_lab8(self, sid, record, snapshot):
+        """Commit only Lab 8 if its request context is still current."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
+            if not row:
+                raise APIError(409, "This student session is no longer available.")
+            data = json.loads(row[0])
+            current = data["labs"]["8"]
+            # Full equality also covers legacy rows and same-revision changes
+            # made by older application processes during a rolling restart.
+            if current != snapshot:
+                raise APIError(409, "Lab 8 changed while this request was running. The old response was discarded.")
+            replacement = copy.deepcopy(record)
+            replacement["lab8_state_revision"] = current.get("lab8_state_revision", 0) + 1
+            data["labs"]["8"] = replacement
+            self._merge_lab8_state(data, {"labs": {"8": current}})
+            db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
+            return data
+
+    def save_lab8_turn(self, sid, record, receipt, *, evidence=None):
+        integer_fields = ("attempt", "defense_level", "state_revision", "saved_revision", "synced_revision")
+        hash_fields = ("message_sha256", "student_request_sha256", "conversation_sha256", "saved_snapshot_sha256",
+                       "synced_snapshot_sha256", "receipt_history_sha256", "contract_sha256")
+        valid = (isinstance(receipt, dict) and type(receipt.get("lab_id")) is int and receipt["lab_id"] == 8
+                 and isinstance(receipt.get("student_id"), str)
+                 and isinstance(receipt.get("student_request"), str)
+                 and isinstance(receipt.get("turn_id"), str)
+                 and re.fullmatch(r"[0-9a-f]{32}", receipt["turn_id"]) is not None
+                 and all(type(receipt.get(key)) is int and receipt[key] >= 0 for key in integer_fields)
+                 and receipt["attempt"] >= 1 and receipt["defense_level"] in (0, 1, 2)
+                 and all(isinstance(receipt.get(key), str) and re.fullmatch(r"[0-9a-f]{64}", receipt[key])
+                         for key in hash_fields)
+                 and (record is None or type(receipt.get("result_revision")) is int))
+        if not valid:
+            raise APIError(409, "Lab 8 rejected malformed verification evidence.")
+        evidence = copy.deepcopy(evidence)
+        receipt = copy.deepcopy(receipt)
+        if record is not None:
+            record = copy.deepcopy(record)
+            record["lab8_state_revision"] = receipt["result_revision"]
+        else:
+            receipt.update(verification_outcome=False, displayed_response_sha256=None,
+                           verification_reason="request_failed")
+
+        def matches(candidate, turn):
+            if evidence is None:
+                return False
+            outcome, reason = _verify_lab8_receipt(turn, **evidence)
+            return (reason != "evidence_mismatch" and turn["verification_outcome"] is outcome
+                    and turn["verification_reason"] == reason and _lab8_record_matches(candidate, turn))
+
+        return self._save_verification_turn(sid, 8, record, receipt, _lab8_snapshot,
+                                            "stale_request_context", matches)
 
     def save_lab3_turn(self, sid, record, receipt):
         """Commit only Lab 3, rechecking its snapshot inside the write transaction."""
@@ -671,6 +860,8 @@ class Store:
             identity = receipt.get("student_id") == sid and receipt.get("lab_id") == lab_id
             fresh = identity and all(receipt.get(key) == value for key, value in snapshot(current).items())
             replayed = any(turn["turn_id"] == receipt["turn_id"] for turn in previous)
+            if lab_id == 8 and (not identity or replayed):
+                raise APIError(409, "Lab 8 rejected evidence for another student or an already processed turn.")
             mismatched = fresh and record is not None and record_matches is not None and not record_matches(record, receipt)
             if not fresh or replayed or mismatched:
                 receipt["verification_outcome"] = False
@@ -686,7 +877,11 @@ class Store:
                 data["labs"][str(lab_id)] = replacement
                 if lab_id in (5, 6):
                     self._merge_durable_award(data, {"labs": {str(lab_id): current}}, lab_id)
+                elif lab_id == 8:
+                    self._merge_lab8_state(data, {"labs": {"8": current}})
             data["labs"][str(lab_id)][key] = previous + [receipt]
+            if lab_id == 8:
+                data["labs"]["8"]["lab8_state_revision"] = current.get("lab8_state_revision", 0) + 1
             db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
         return data, fresh and not replayed and not mismatched
 
@@ -761,6 +956,8 @@ class Store:
             record = data["labs"][str(lab_id)]
             if not (record.get("exploited") or record.get("completed")):
                 raise APIError(403, "Trigger this lab’s exploit in the chat before submitting a flag.")
+            if lab_id == 8 and not record.get("completed") and _lab8_capture(sid, record) is None:
+                raise APIError(403, "Verify the Lab 8 handover assertion in a current production request before submitting a flag.")
             if submitted.startswith("AIGOAT{"):
                 submitted = "PANOPTIS{" + submitted[len("AIGOAT{"):]
             try:
@@ -775,6 +972,9 @@ class Store:
             newly_completed = not record["completed"]
             if newly_completed:
                 record.update(completed=True, **{origin_key: origin})
+                if lab_id == 8:
+                    record["lab8_award_receipt"] = copy.deepcopy(_lab8_capture(sid, record))
+                    record["lab8_state_revision"] = record.get("lab8_state_revision", 0) + 1
                 db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
             return data, newly_completed
 
@@ -930,6 +1130,28 @@ class Application:
                 "kb_revision": record["kb_revision"], "synced_revision": record["synced_revision"],
                 "use_kb": record["use_kb"], "last_result": record["last_result"],
                 "defense_level": record.get("defense_level", 0)}
+        if lab_id == 8:
+            public["attempt"] = record["attempt"]
+            public["state_version"] = [record["attempt"], record.get("lab8_state_revision", 0)]
+            capture = _lab8_capture(sid, record)
+            public["exploited"] = capture is not None
+            public["flag"] = (self.store.flag(sid, 8, record.get("lab8_flag_attempt", record["attempt"]))
+                              if record["completed"] else self.store.flag(sid, 8, record["attempt"])
+                              if capture is not None else None)
+            if record["last_result"] is not None:
+                result = public["last_result"] = copy.deepcopy(record["last_result"])
+                visible = next((turn["content"] for turn in reversed(record["messages"])
+                                if turn["role"] == "assistant"), None)
+                result["triggered"] = bool(capture and any(
+                    turn.get("turn_id") == result.get("request_id")
+                    and turn.get("verification_outcome") is True
+                    and turn.get("student_id") == sid and turn.get("lab_id") == 8
+                    and turn.get("attempt") == record["attempt"]
+                    and turn.get("contract_sha256") == LAB8_CONTRACT_SHA256
+                    and turn.get("generation_source") == "production_ollama"
+                    and visible is not None and turn.get("displayed_response_sha256") == _lab3_hash(visible)
+                    for turn in record.get("lab8_verification_receipts", [])))
+                result["message"] = "Exploit verified." if result["triggered"] else "No exploit verified for this reply."
         if lab_id == 1:
             public["boiler"] = copy.deepcopy(record["boiler"])
             public["boiler_version"] = [record["attempt"], record.get("boiler_revision", 0)]
@@ -1015,8 +1237,11 @@ class Application:
         return {"catalog": CATALOG, "summary": self.summary(data),
                 "labs": {str(i): self.public_lab(sid, i, data["labs"][str(i)]) for i in range(1, 10)}}
 
-    def lab_result(self, sid, lab_id, data):
-        return {"lab": self.public_lab(sid, lab_id, data["labs"][str(lab_id)]), "summary": self.summary(data)}
+    def lab_result(self, sid, lab_id, data, *, request_id=None):
+        result = {"lab": self.public_lab(sid, lab_id, data["labs"][str(lab_id)]), "summary": self.summary(data)}
+        if lab_id == 8:
+            result["request_id"] = request_id or secrets.token_hex(16)
+        return result
 
     def advance_saved_boiler(self, record):
         now = time.time()
@@ -1122,7 +1347,9 @@ class Application:
             tool_events.append(event)
             return result
 
-    def chat(self, sid, lab_id, body):
+    def chat(self, sid, lab_id, body, *, request_id=None):
+        if lab_id == 8:
+            request_id = request_id or secrets.token_hex(16)
         message = body.get("message")
         if not isinstance(message, str) or not message.strip() or len(message) > 4000:
             raise APIError(400, "Write a message between 1 and 4,000 characters.")
@@ -1145,6 +1372,10 @@ class Application:
         lab6_generated = lab6_displayed = lab6_messages = None
         lab6_generation = {}
         lab6_saved = False
+        lab8_binding = None
+        lab8_generated = lab8_displayed = lab8_messages = None
+        lab8_generation = {}
+        lab8_saved = False
         try:
             with self.session_lock(sid):
                 _, data = self.store.get(sid)
@@ -1174,6 +1405,13 @@ class Application:
                                 "student_request_sha256": _lab3_hash(body["message"]),
                                 "message_sha256": _lab3_hash(message), "model_context_sha256": None,
                                 "ollama_request_sha256": None, "generation_source": "not_generated"}
+            if lab_id == 8:
+                lab8_binding = {"student_id": sid, "lab_id": 8, "turn_id": request_id,
+                                **_lab8_snapshot(snapshot), "contract_sha256": LAB8_CONTRACT_SHA256,
+                                "student_request": body["message"],
+                                "student_request_sha256": _lab3_hash(body["message"]),
+                                "message_sha256": _lab3_hash(message), "model_context_sha256": None,
+                                "ollama_request_sha256": None, "generation_source": "not_generated"}
             tool_events = []
             level = snapshot.get("defense_level", 0)
             cleaned_message, blocked_reason = defend_input(message, level, lab_id=lab_id)
@@ -1187,6 +1425,8 @@ class Application:
             if lab6_binding is not None:
                 lab6_binding["effective_message_sha256"] = _lab3_hash(cleaned_message)
             use_kb = body.get("use_kb", snapshot["use_kb"]) and lab_id in KB_LABS
+            if lab8_binding is not None:
+                lab8_binding.update(kb_enabled=use_kb, effective_message_sha256=_lab3_hash(cleaned_message))
             entries = retrieve(cleaned_message, snapshot["synced_documents"]) if use_kb and not blocked_reason else []
             entries, excluded_entries = defend_retrieval(entries, level, lab_id=lab_id)
             # Bound context size without misreporting which content the evaluator saw.
@@ -1200,6 +1440,8 @@ class Application:
                 used_entries.append(entry)
             if lab3_binding is not None:
                 lab3_binding["retrieved_documents"] = _lab3_excerpts(used_entries)
+            if lab8_binding is not None:
+                lab8_binding["retrieved_documents"] = _lab3_excerpts(used_entries)
             if blocked_reason:
                 reply = ("I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
                          if lab_id == 1 else LAB2_REFUSAL if lab_id == 2
@@ -1224,6 +1466,10 @@ class Application:
                     lab6_messages = copy.deepcopy(messages)
                     lab6_binding["model_context_sha256"] = _lab3_hash(messages)
                     lab6_binding["ollama_request_sha256"] = _lab5_request_hash(messages)
+                elif lab8_binding is not None:
+                    lab8_messages = copy.deepcopy(messages)
+                    lab8_binding["model_context_sha256"] = _lab3_hash(messages)
+                    lab8_binding["ollama_request_sha256"] = _lab5_request_hash(messages)
                 if lab_id == 1 and self.model is local_model:
                     messages[0]["content"] += (
                         "\n\nOnly for questions asking for current measurement values, call get_boiler_status before "
@@ -1290,6 +1536,16 @@ class Application:
                     else:
                         reply = model(messages)
                         lab6_generated = reply if isinstance(reply, str) else None
+                elif lab_id == 8:
+                    model = self.model
+                    production = model is _PRODUCTION_OLLAMA_MODEL
+                    lab8_binding["generation_source"] = "production_ollama" if production else "test_fixture"
+                    if production:
+                        reply = model(messages, generation_evidence=lab8_generation)
+                        lab8_generated = lab8_generation.get("original_response")
+                    else:
+                        reply = model(messages)
+                        lab8_generated = reply if isinstance(reply, str) else None
                 else:
                     # Only the production Ollama path supplies live evidence.
                     # Injected demo/test callables can display text but cannot
@@ -1304,6 +1560,10 @@ class Application:
                 reply, blocked_reason = defend_output(reply, level, lab_id=lab_id)
                 if lab_id == 1 and blocked_reason:
                     reply = "I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
+            if lab_id == 8 and blocked_reason:
+                # Only application-generated refusals change terminology.
+                # Keep the original decision, reason and defense thresholds.
+                reply = lab8_terminology(reply)
             if lab3_binding is not None:
                 lab3_displayed = reply
             elif lab4_binding is not None:
@@ -1312,6 +1572,8 @@ class Application:
                 lab5_displayed = reply
             elif lab6_binding is not None:
                 lab6_displayed = reply
+            elif lab8_binding is not None:
+                lab8_displayed = reply
             history = snapshot["messages"] + [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
             # Only this turn's native executions count; saved audit events are
             # never evaluated again, including events from failed generations.
@@ -1344,6 +1606,16 @@ class Application:
                     "actual_request_sha256": lab6_generation.get("ollama_request_sha256")}
                 triggered, reason = _verify_lab6_receipt(lab6_turn, **lab6_evidence)
                 lab6_turn.update(verification_outcome=triggered, verification_reason=reason)
+            elif lab_id == 8:
+                lab8_turn = _lab3_receipt(lab8_binding, lab8_generated, lab8_displayed)
+                lab8_turn.update(result_revision=lab8_binding["state_revision"] + 1,
+                                 result_history_sha256=_lab3_hash(history[-60:]))
+                lab8_evidence = {"binding": lab8_binding, "snapshot": snapshot, "entries": copy.deepcopy(used_entries),
+                    "generated": lab8_generated, "displayed": lab8_displayed, "message": message,
+                    "effective_message": cleaned_message, "history": history, "blocked": blocked_reason,
+                    "messages": lab8_messages, "actual_request_sha256": lab8_generation.get("ollama_request_sha256")}
+                triggered, reason = _verify_lab8_receipt(lab8_turn, **lab8_evidence)
+                lab8_turn.update(verification_outcome=triggered, verification_reason=reason)
             elif lab_id in (2, 4, 5):
                 # Evaluate the final visible reply, including a defense refusal.
                 triggered = check_exploit(lab_id, message, reply, history, used_entries, level)
@@ -1428,9 +1700,15 @@ class Application:
                         raise APIError(409, "This conversation changed while the AI was replying. The old reply was discarded.")
                 elif lab2_turn is not None:
                     self.store.save(sid, data, lab2_turn=lab2_turn)
+                elif lab_id == 8:
+                    record["last_result"]["request_id"] = request_id
+                    data, fresh = self.store.save_lab8_turn(sid, record, lab8_turn, evidence=lab8_evidence)
+                    lab8_saved = True
+                    if not fresh:
+                        raise APIError(409, "Lab 8 changed while the AI was replying. The old response was discarded.")
                 else:
                     self.store.save(sid, data)
-                return self.lab_result(sid, lab_id, data)
+                return self.lab_result(sid, lab_id, data, request_id=request_id)
         except Exception:
             if lab3_binding is not None and not lab3_saved:
                 receipt = _lab3_receipt(lab3_binding, lab3_generated, None)
@@ -1452,6 +1730,10 @@ class Application:
                 receipt = _lab3_receipt(lab6_binding, lab6_generation.get("original_response", lab6_generated), None)
                 with self.session_lock(sid):
                     self.store.save_lab6_turn(sid, None, receipt)
+            elif lab8_binding is not None and not lab8_saved:
+                receipt = _lab3_receipt(lab8_binding, lab8_generation.get("original_response", lab8_generated), None)
+                with self.session_lock(sid):
+                    self.store.save_lab8_turn(sid, None, receipt)
             raise
         finally:
             self.generation.release()
@@ -1464,7 +1746,7 @@ class Application:
             raise APIError(400, "Keep up to eight documents in this lab’s knowledge base.")
         if not isinstance(body.get("use_kb", False), bool) or not isinstance(body.get("sync", False), bool):
             raise APIError(400, "Knowledge base settings must be on or off.")
-        originals = {3: LAB3_DOCUMENTS, 7: LAB7_DOCUMENTS}.get(lab_id, DEFAULT_DOCUMENTS)
+        originals = {3: LAB3_DOCUMENTS, 7: LAB7_DOCUMENTS, 8: LAB8_DOCUMENTS}.get(lab_id, DEFAULT_DOCUMENTS)
         clean = []
         seen = set()
         for doc in documents:
@@ -1487,6 +1769,7 @@ class Application:
         with self.session_lock(sid):
             _, data = self.store.get(sid)
             record = data["labs"][str(lab_id)]
+            snapshot = copy.deepcopy(record) if lab_id == 8 else None
             if clean != record["documents"]:
                 record["documents"] = clean
                 record["kb_revision"] += 1
@@ -1494,7 +1777,10 @@ class Application:
             if body.get("sync"):
                 record["synced_documents"] = copy.deepcopy(clean)
                 record["synced_revision"] = record["kb_revision"]
-            self.store.save(sid, data)
+            if lab_id == 8:
+                data = self.store.save_lab8(sid, record, snapshot)
+            else:
+                self.store.save(sid, data)
             return self.lab_result(sid, lab_id, data)
 
     def submit_flag(self, sid, lab_id, body):
@@ -1526,7 +1812,7 @@ class Application:
                 result["flag_submission"] = {"newly_completed": newly_completed,
                     "points_awarded": CATALOG[3]["points"] if newly_completed else 0}
                 return result
-        if lab_id in (5, 6):
+        if lab_id in (5, 6, 8):
             with self.session_lock(sid):
                 data, newly_completed = self.store.submit_durable_flag(sid, lab_id, flag.strip())
                 result = self.lab_result(sid, lab_id, data)
@@ -1546,8 +1832,12 @@ class Application:
             expected = self.store.flag(sid, lab_id, record["attempt"])
             if not hmac.compare_digest(submitted.encode(), expected.encode()):
                 raise APIError(400, "That flag does not match this lab and attempt.")
+            snapshot = copy.deepcopy(record) if lab_id == 8 else None
             record["completed"] = True
-            self.store.save(sid, data)
+            if lab_id == 8:
+                data = self.store.save_lab8(sid, record, snapshot)
+            else:
+                self.store.save(sid, data)
             return self.lab_result(sid, lab_id, data)
 
     def update_defense(self, sid, lab_id, body):
@@ -1564,7 +1854,10 @@ class Application:
                 for key in ("documents", "synced_documents", "kb_revision", "synced_revision", "use_kb"):
                     replacement[key] = copy.deepcopy(current[key])
                 data["labs"][str(lab_id)] = replacement
-                self.store.save(sid, data)
+                if lab_id == 8:
+                    data = self.store.save_lab8(sid, replacement, current)
+                else:
+                    self.store.save(sid, data)
             return self.lab_result(sid, lab_id, data)
 
     def reset(self, sid, lab_id):
@@ -1574,7 +1867,10 @@ class Application:
             data["labs"][str(lab_id)] = fresh_lab(current["attempt"] + 1, current.get("defense_level", 0), lab_id=lab_id)
             if lab_id == 1:
                 data["labs"]["1"]["operational_alerts"] = fresh_operational_alerts()
-            self.store.save(sid, data)
+            if lab_id == 8:
+                data = self.store.save_lab8(sid, data["labs"]["8"], current)
+            else:
+                self.store.save(sid, data)
             return self.lab_result(sid, lab_id, data)
 
 
@@ -1691,6 +1987,7 @@ def make_handler(app):
 
         def do_POST(self):
             sid = None
+            request_id = secrets.token_hex(16) if self.path.startswith("/api/labs/8/") else None
             try:
                 origin = self.headers.get("Origin")
                 if origin and urlsplit(origin).netloc != self.headers.get("Host"):
@@ -1719,7 +2016,8 @@ def make_handler(app):
                     raise APIError(404, "Lab or action not found.")
                 sid, _ = self.session()
                 if action == "chat":
-                    result = app.chat(sid, lab_id, body)
+                    result = (app.chat(sid, lab_id, body, request_id=request_id) if lab_id == 8
+                              else app.chat(sid, lab_id, body))
                 elif action == "kb":
                     result = app.update_kb(sid, lab_id, body)
                 elif action == "flag":
@@ -1732,14 +2030,17 @@ def make_handler(app):
                     result = app.update_alert_comment(sid, body)
                 else:
                     result = app.reset(sid, lab_id)
+                if request_id is not None:
+                    result["request_id"] = request_id
                 self.respond(200, result, sid=sid)
             except APIError as exc:
-                self.respond(exc.status, {"error": str(exc)}, sid=sid)
+                self.respond(exc.status, {"error": str(exc), **({"request_id": request_id} if request_id else {})}, sid=sid)
             except (BrokenPipeError, ConnectionResetError):
                 pass
             except Exception:
                 logging.exception("Request failed")
-                self.respond(500, {"error": "Something went wrong. Your saved progress is safe; please try again."}, sid=sid)
+                self.respond(500, {"error": "Something went wrong. Your saved progress is safe; please try again.",
+                                   **({"request_id": request_id} if request_id else {})}, sid=sid)
 
     return Handler
 

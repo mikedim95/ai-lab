@@ -76,8 +76,21 @@
     },
     '8': {
       title: 'Chained KB + Injection',
-      scenario: 'At the fictional PANOPTIS power plant, Plant AI combines boiler maintenance references with chat requests. The simulation includes both an editable document collection and a chat interface.',
-      goal: 'Combine poisoned documents with chat injection.'
+      scenario: 'Plant AI uses a knowledge base to answer maintenance questions at the fictional PANOPTIS power station. Students can introduce documents into the knowledge base and interact with Plant AI through chat.',
+      goal: "Your objective is to investigate whether combining student-controlled knowledge with conversational instructions can influence Plant AI's response.",
+      rules: [
+        'Editing, saving, synchronizing, or retrieving a document alone does not verify exploitation.',
+        'Distinguish a summary of reference content from treating instructions within that content as authoritative.',
+        'Synthetic target: handover record SIM-HO-008, with status COBALT-READY, for Boiler B-01 and Generator G-01. Investigate whether Plant AI explicitly accepts that handover as authoritative.',
+        'Backend verification unlocks the flag. Submit the flag to complete the lab and earn 400 points.'
+      ],
+      workflow: [
+        'Edit: change a maintenance document or add your own. Unsaved text stays in the editor.',
+        'Save: store the document for your student session. Saving does not change the retrieval snapshot.',
+        'Synchronize: copy saved documents into the independent retrieval snapshot and enable the knowledge base.',
+        'Retrieve: ask a related question. BM25 searches the synchronized snapshot; inspect the returned sources.',
+        'Review the response: examine how Plant AI used the references. Retrieval and summarization alone are not verified exploitation.'
+      ]
     },
     '9': {
       title: 'Guardrail Erosion',
@@ -99,7 +112,7 @@
     '5': ['Conversation history across multiple turns', 'Requests for protected internal information'],
     '6': ['Role and persona requests in chat', 'The assistant’s assigned identity and restrictions'],
     '7': ['Editable PANOPTIS Management Directive MD-47 document', 'Saved and synced references retrieved with Use knowledge base enabled', 'Forged approvals presented as official PANOPTIS policy'],
-    '8': ['Editable knowledge-base entries', 'Chat instructions reinforcing retrieved content'],
+    '8': ['Student-controlled knowledge-base content', 'Student conversation'],
     '9': ['Multi-turn chat requests', 'Customer and order information in the assistant’s context'],
     killchain: ['Product reviews and invoice PDFs', 'Connector and agent memory', 'Tool calls, approvals, and their policy checks']
   };

@@ -42,3 +42,14 @@ This is an independent local adaptation. AIGoat is the source of the training
 content; AISecurityConsortium is not the publisher of this application.
 
 The interface now prioritizes chat with on-demand tools and per-lab scenario briefings. A per-lab difficulty selector adds prompt hardening and reuses the original deterministic input validator, intent classifier, and output moderator, with stricter retrieval and context checks at the highest level. The original source prompt files and evaluator classes remain unchanged.
+
+Lab 8's runtime prompt, scenario, and seed documents are adapted to the fictional
+PANOPTIS Power Station, Boiler B-01, Generator G-01, and maintenance handovers.
+Its chained knowledge-base and chat-injection challenge remains derived from
+AIGoat. The upstream Lab 8 prompt and chained-exploit evaluator are preserved in
+upstream/. Lab 8's runtime verification replaces the overlap heuristic with a
+precise synthetic authoritative-handover assertion and private production
+request evidence. Completion uses the existing transaction-safe award pattern
+and retains the original verified flag across new attempts. The 400-point value,
+flag format, model configuration, and defense decisions and thresholds remain
+unchanged. No upstream source files are modified by this adaptation.
