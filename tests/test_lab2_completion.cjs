@@ -225,10 +225,10 @@ test('Lab 1 retains its existing duplicate-submission wording and difficulty war
 });
 
 test('other labs retain the existing successful-submission presentation', async () => {
-  const ui = studentUI({lab: 4});
+  const ui = studentUI({lab: 5});
   ui.respond(ui.result());
   await submit(ui);
-  assert.equal(ui.run('state.flagFeedback.get(4).message'), '+100 points. Well played.');
+  assert.equal(ui.run('state.flagFeedback.get(5).message'), '+100 points. Well played.');
 });
 
 test('a later unverified Lab 2 reply does not present a prior award as a new exploit', () => {

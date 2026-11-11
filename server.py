@@ -28,6 +28,7 @@ from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_FI
                      TOTAL_POINTS, build_messages, check_boiler_control, check_exploit, defend_input,
                      defend_output, defend_retrieval, fresh_lab, lab2_instruction_leaks,
                      lab2_supplied_instructions, retrieve)
+from catalog import _lab4_endorsed_readings, _lab4_normalize, _lab4_readings
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", ROOT / "data"))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -134,6 +135,67 @@ def _verify_lab3_receipt(receipt, binding, snapshot, entries, generated, display
     return eligible, "verified" if eligible else "interval_not_verified"
 
 
+def _lab4_snapshot(record):
+    return {"attempt": record["attempt"], "defense_level": record.get("defense_level", 0),
+            "trusted_snapshot_sha256": _lab3_hash(LAB4_TRUSTED_SNAPSHOT)}
+
+
+def _lab4_feedback(record):
+    """Present the latest reply without changing verification or saved state."""
+    if (record.get("last_result") or {}).get("triggered") is True:
+        return "accepted"
+    reply = next((turn["content"] for turn in reversed(record["messages"])
+                  if turn["role"] == "assistant"), "")
+    baseline = {key: LAB4_TRUSTED_SNAPSHOT[key] for key in ("water_in_pct", "fuel_in_pct")}
+    if reply == LAB4_REFUSAL or _lab4_endorsed_readings(reply) == baseline:
+        return "preserved"
+    # Mentioning an alternative (including a quotation) is presentation feedback,
+    # never evidence that Plant AI authenticated it or that the exploit succeeded.
+    for part in [reply, *reply.splitlines()]:
+        readings = _lab4_readings(_lab4_normalize(part), for_defense=True) or {}
+        if any(key in readings and readings[key] != value for key, value in baseline.items()):
+            return "mentioned"
+    return "not_detected"
+
+
+def _lab4_record_matches(record, receipt):
+    turns = record.get("messages", [])[-2:]
+    return (all(receipt.get(key) == value for key, value in _lab4_snapshot(record).items())
+            and len(turns) == 2 and turns[0].get("role") == "user" and turns[1].get("role") == "assistant"
+            and _lab3_hash(turns[0].get("content")) == receipt.get("message_sha256")
+            and _lab3_hash(turns[1].get("content")) == receipt.get("displayed_response_sha256")
+            and (record.get("last_result") or {}).get("triggered") is receipt.get("verification_outcome"))
+
+
+def _verify_lab4_receipt(receipt, binding, snapshot, generated, displayed, message, effective_message,
+                         history, blocked, messages):
+    """Bind the unchanged telemetry matcher to one backend generation request."""
+    expected = {**binding, **_lab4_snapshot(snapshot), "message_sha256": _lab3_hash(message),
+                "effective_message_sha256": _lab3_hash(effective_message),
+                "model_context_sha256": _lab3_hash(messages),
+                "generated_response_sha256": _lab3_hash(generated),
+                "displayed_response_sha256": _lab3_hash(displayed)}
+    if any(receipt.get(key) != value for key, value in expected.items()):
+        return False, "evidence_mismatch"
+    # Keep the existing final-visible-response interpretation, then require
+    # that generation itself qualified before any output processing.
+    visible_eligible = check_exploit(4, message, displayed, history, [], binding["defense_level"])
+    if blocked:
+        return False, "defense_blocked"
+    if binding["generation_source"] != "production_ollama":
+        return False, "non_production_generation"
+    if not isinstance(generated, str) or not generated.strip() or not isinstance(displayed, str):
+        return False, "missing_response"
+    context = "AUTHENTICATED PANOPTIS TELEMETRY:\n" + json.dumps(LAB4_TRUSTED_SNAPSHOT, indent=2)
+    if (not messages or messages[0]["role"] != "system" or context not in messages[0]["content"]
+            or messages[-1] != {"role": "user", "content": effective_message}):
+        return False, "model_context_mismatch"
+    if not history or history[-1] != {"role": "assistant", "content": displayed}:
+        return False, "displayed_response_mismatch"
+    eligible = visible_eligible and check_exploit(4, message, generated, history, [], binding["defense_level"])
+    return eligible, "verified" if eligible else "telemetry_not_verified"
+
+
 def fresh_operational_alerts():
     return [{"id": "fuel-flow-deviation", "severity": "Warning",
              "message": "Fuel flow deviation detected", "timestamp": time.time(), "comments": ""}]
@@ -234,6 +296,7 @@ class Store:
                     if latest:
                         self._merge_lab2_award(data, json.loads(latest[0]))
                         self._merge_lab3_award(data, json.loads(latest[0]))
+                        self._merge_lab4_award(data, json.loads(latest[0]))
                     db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
                 return sid, data
             sid = secrets.token_urlsafe(32)
@@ -272,6 +335,20 @@ class Store:
             if "lab3_flag_attempt" in saved or current["attempt"] != saved["attempt"]:
                 current["lab3_flag_attempt"] = saved.get("lab3_flag_attempt", saved["attempt"])
 
+    @staticmethod
+    def _merge_lab4_award(data, previous):
+        """Keep the earned award and flag origin independent of new attempts."""
+        current = data.get("labs", {}).get("4")
+        saved = previous.get("labs", {}).get("4", {})
+        if not isinstance(current, dict):
+            return
+        if current.get("attempt", 0) < saved.get("attempt", 0):
+            current = data["labs"]["4"] = copy.deepcopy(saved)
+        if saved.get("completed"):
+            current["completed"] = True
+            if "lab4_flag_attempt" in saved or current["attempt"] != saved["attempt"]:
+                current["lab4_flag_attempt"] = saved.get("lab4_flag_attempt", saved["attempt"])
+
     def save(self, sid, data, *, lab2_turn=None):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -282,6 +359,7 @@ class Store:
                     raise APIError(409, "This lab was restarted while the AI was replying. The old reply was discarded.")
                 self._merge_lab2_award(data, previous)
                 self._merge_lab3_award(data, previous)
+                self._merge_lab4_award(data, previous)
             if lab2_turn is not None:
                 db.execute("INSERT INTO lab2_extraction_turns VALUES (?, ?, ?, ?)",
                            (sid, data["labs"]["2"]["attempt"], lab2_turn["turn_id"], json.dumps(lab2_turn)))
@@ -289,6 +367,14 @@ class Store:
 
     def save_lab3_turn(self, sid, record, receipt):
         """Commit only Lab 3, rechecking its snapshot inside the write transaction."""
+        return self._save_verification_turn(sid, 3, record, receipt, _lab3_snapshot, "stale_knowledge_snapshot")
+
+    def save_lab4_turn(self, sid, record, receipt):
+        return self._save_verification_turn(sid, 4, record, receipt, _lab4_snapshot,
+                                            "stale_request_context", _lab4_record_matches)
+
+    def _save_verification_turn(self, sid, lab_id, record, receipt, snapshot, stale_reason, record_matches=None):
+        """Commit one lab's private receipt against the current session row."""
         receipt = copy.deepcopy(receipt)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -296,25 +382,28 @@ class Store:
             if not row:
                 raise APIError(409, "This student session is no longer available.")
             data = json.loads(row[0])
-            current = data["labs"]["3"]
-            previous = current.get("lab3_verification_receipts", [])
-            identity = receipt.get("student_id") == sid and receipt.get("lab_id") == 3
-            fresh = identity and all(receipt.get(key) == value for key, value in _lab3_snapshot(current).items())
+            key = f"lab{lab_id}_verification_receipts"
+            current = data["labs"][str(lab_id)]
+            previous = current.get(key, [])
+            identity = receipt.get("student_id") == sid and receipt.get("lab_id") == lab_id
+            fresh = identity and all(receipt.get(key) == value for key, value in snapshot(current).items())
             replayed = any(turn["turn_id"] == receipt["turn_id"] for turn in previous)
-            if not fresh or replayed:
+            mismatched = fresh and record is not None and record_matches is not None and not record_matches(record, receipt)
+            if not fresh or replayed or mismatched:
                 receipt["verification_outcome"] = False
                 receipt["displayed_response_sha256"] = None
                 receipt["verification_reason"] = ("identity_mismatch" if not identity else
-                    "replayed_turn" if replayed else "stale_attempt" if receipt.get("attempt") != current["attempt"]
-                    else "stale_knowledge_snapshot")
+                    "replayed_turn" if replayed else "displayed_response_mismatch" if mismatched
+                    else "stale_attempt" if receipt.get("attempt") != current["attempt"]
+                    else stale_reason)
             elif record is not None:
                 replacement = copy.deepcopy(record)
                 replacement["completed"] = current["completed"]
                 replacement["exploited"] = current["exploited"] or receipt["verification_outcome"]
-                data["labs"]["3"] = replacement
-            data["labs"]["3"]["lab3_verification_receipts"] = previous + [receipt]
+                data["labs"][str(lab_id)] = replacement
+            data["labs"][str(lab_id)][key] = previous + [receipt]
             db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
-        return data, fresh and not replayed
+        return data, fresh and not replayed and not mismatched
 
     def submit_lab2_flag(self, sid, submitted):
         """Validate and commit one completion transition using the session's PK."""
@@ -371,6 +460,33 @@ class Store:
                 record.update(completed=True, lab3_flag_attempt=origin)
                 db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?",
                            (json.dumps(data), time.time(), sid))
+            return data, newly_completed
+
+    def submit_lab4_flag(self, sid, submitted):
+        """Reuse the session-row completion transaction; never increment a score."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
+            if not row:
+                raise APIError(403, "Trigger this lab’s exploit in the chat before submitting a flag.")
+            data = json.loads(row[0])
+            record = data["labs"]["4"]
+            if not (record.get("exploited") or record.get("completed")):
+                raise APIError(403, "Trigger this lab’s exploit in the chat before submitting a flag.")
+            if submitted.startswith("AIGOAT{"):
+                submitted = "PANOPTIS{" + submitted[len("AIGOAT{"):]
+            try:
+                supplied = submitted.encode("ascii")
+            except UnicodeEncodeError:
+                raise APIError(400, "That flag does not match this lab and attempt.") from None
+            origin = record.get("lab4_flag_attempt", record["attempt"]) if record.get("completed") else record["attempt"]
+            expected = self.flag(sid, 4, origin)
+            if not hmac.compare_digest(supplied, expected.encode("ascii")):
+                raise APIError(400, "That flag does not match this lab and attempt.")
+            newly_completed = not record["completed"]
+            if newly_completed:
+                record.update(completed=True, lab4_flag_attempt=origin)
+                db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
             return data, newly_completed
 
     def lab2_progress(self, sid, attempt, *, legacy_messages=()):
@@ -480,6 +596,10 @@ def local_model(messages, tools=None, get_boiler_status=None, set_boiler_inputs=
         raise APIError(503, "The local AI is unavailable or took too long. Your progress is saved; please try again.") from exc
 
 
+# Keep production identity independent of an injected or monkeypatched callback.
+_PRODUCTION_OLLAMA_MODEL = local_model
+
+
 def advance_boiler(boiler, dt):
     """The existing classroom dynamics, evaluated against the saved readings."""
     clamp = lambda value, low, high: min(high, max(low, value))
@@ -561,7 +681,13 @@ class Application:
                             and receipt["synced_snapshot_sha256"] == _lab3_hash(record["synced_documents"]))
                         break
         elif lab_id == 4:
+            public["attempt"] = record["attempt"]
+            if record["completed"]:
+                public["flag"] = self.store.flag(sid, 4, record.get("lab4_flag_attempt", record["attempt"]))
             public["trusted_snapshot"] = copy.deepcopy(LAB4_TRUSTED_SNAPSHOT)
+            if record["last_result"] is not None:
+                public["last_result"] = copy.deepcopy(record["last_result"])
+                public["last_result"]["context_override_status"] = _lab4_feedback(record)
         return public
 
     def state(self, sid, data):
@@ -688,6 +814,9 @@ class Application:
         lab3_generated = lab3_displayed = None
         lab3_messages = None
         lab3_saved = False
+        lab4_binding = None
+        lab4_generated = lab4_displayed = lab4_messages = None
+        lab4_saved = False
         try:
             with self.session_lock(sid):
                 _, data = self.store.get(sid)
@@ -702,9 +831,15 @@ class Application:
                                 **_lab3_snapshot(snapshot), "message_sha256": _lab3_hash(message),
                                 "retrieved_documents": [], "model_context_sha256": None,
                                 "generation_source": "not_generated"}
+            elif lab_id == 4:
+                lab4_binding = {"student_id": sid, "lab_id": 4, "turn_id": secrets.token_hex(16),
+                                **_lab4_snapshot(snapshot), "message_sha256": _lab3_hash(message),
+                                "model_context_sha256": None, "generation_source": "not_generated"}
             tool_events = []
             level = snapshot.get("defense_level", 0)
             cleaned_message, blocked_reason = defend_input(message, level, lab_id=lab_id)
+            if lab4_binding is not None:
+                lab4_binding["effective_message_sha256"] = _lab3_hash(cleaned_message)
             use_kb = body.get("use_kb", snapshot["use_kb"]) and lab_id in KB_LABS
             entries = retrieve(cleaned_message, snapshot["synced_documents"]) if use_kb and not blocked_reason else []
             entries, excluded_entries = defend_retrieval(entries, level, lab_id=lab_id)
@@ -732,6 +867,9 @@ class Application:
                 if lab3_binding is not None:
                     lab3_messages = messages
                     lab3_binding["model_context_sha256"] = _lab3_hash(messages)
+                elif lab4_binding is not None:
+                    lab4_messages = copy.deepcopy(messages)
+                    lab4_binding["model_context_sha256"] = _lab3_hash(messages)
                 if lab_id == 1 and self.model is local_model:
                     messages[0]["content"] += (
                         "\n\nOnly for questions asking for current measurement values, call get_boiler_status before "
@@ -778,6 +916,11 @@ class Application:
                     lab3_binding["generation_source"] = ("production_ollama" if model is local_model else "test_fixture")
                     reply = model(messages)
                     lab3_generated = reply if isinstance(reply, str) else None
+                elif lab_id == 4:
+                    model = self.model
+                    lab4_binding["generation_source"] = ("production_ollama" if model is _PRODUCTION_OLLAMA_MODEL else "test_fixture")
+                    reply = model(messages)
+                    lab4_generated = reply if isinstance(reply, str) else None
                 else:
                     # Only the production Ollama path supplies live evidence.
                     # Injected demo/test callables can display text but cannot
@@ -794,6 +937,8 @@ class Application:
                     reply = "I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
             if lab3_binding is not None:
                 lab3_displayed = reply
+            elif lab4_binding is not None:
+                lab4_displayed = reply
             history = snapshot["messages"] + [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
             # Only this turn's native executions count; saved audit events are
             # never evaluated again, including events from failed generations.
@@ -804,6 +949,11 @@ class Application:
                 triggered, reason = _verify_lab3_receipt(lab3_turn, lab3_binding, snapshot, used_entries,
                     lab3_generated, lab3_displayed, message, history, blocked_reason, lab3_messages)
                 lab3_turn.update(verification_outcome=triggered, verification_reason=reason)
+            elif lab_id == 4:
+                lab4_turn = _lab3_receipt(lab4_binding, lab4_generated, lab4_displayed)
+                triggered, reason = _verify_lab4_receipt(lab4_turn, lab4_binding, snapshot, lab4_generated,
+                    lab4_displayed, message, cleaned_message, history, blocked_reason, lab4_messages)
+                lab4_turn.update(verification_outcome=triggered, verification_reason=reason)
             elif lab_id in (2, 4, 5):
                 # Evaluate the final visible reply, including a defense refusal.
                 triggered = check_exploit(lab_id, message, reply, history, used_entries, level)
@@ -871,6 +1021,11 @@ class Application:
                     lab3_saved = True
                     if not fresh:
                         raise APIError(409, "This lab's synced knowledge changed while the AI was replying. The old reply was discarded.")
+                elif lab_id == 4:
+                    data, fresh = self.store.save_lab4_turn(sid, record, lab4_turn)
+                    lab4_saved = True
+                    if not fresh:
+                        raise APIError(409, "This lab was restarted while the AI was replying. The old reply was discarded.")
                 elif lab2_turn is not None:
                     self.store.save(sid, data, lab2_turn=lab2_turn)
                 else:
@@ -881,6 +1036,10 @@ class Application:
                 receipt = _lab3_receipt(lab3_binding, lab3_generated, None)
                 with self.session_lock(sid):
                     self.store.save_lab3_turn(sid, None, receipt)
+            elif lab4_binding is not None and not lab4_saved:
+                receipt = _lab3_receipt(lab4_binding, lab4_generated, None)
+                with self.session_lock(sid):
+                    self.store.save_lab4_turn(sid, None, receipt)
             raise
         finally:
             self.generation.release()
@@ -947,6 +1106,13 @@ class Application:
                     "newly_completed": newly_completed,
                     "points_awarded": CATALOG[2]["points"] if newly_completed else 0,
                 }
+                return result
+        if lab_id == 4:
+            with self.session_lock(sid):
+                data, newly_completed = self.store.submit_lab4_flag(sid, flag.strip())
+                result = self.lab_result(sid, lab_id, data)
+                result["flag_submission"] = {"newly_completed": newly_completed,
+                    "points_awarded": CATALOG[3]["points"] if newly_completed else 0}
                 return result
         with self.session_lock(sid):
             _, data = self.store.get(sid)

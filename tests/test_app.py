@@ -160,7 +160,26 @@ class LabTests(unittest.TestCase):
             return self.native_lab2_chat(message, **extra)
         if lab_id == 3:
             return self.native_lab3_chat(message, **extra)
+        if lab_id == 4 and self.app.model is not server._PRODUCTION_OLLAMA_MODEL:
+            return self.native_lab4_chat(message, **extra)
         return self.request(f"/api/labs/{lab_id}/chat", {"message": message, **extra})
+
+    def native_lab4_chat(self, message, **extra):
+        """Mock Ollama transport while exercising Lab 4 production provenance."""
+        def ollama(request, timeout):
+            self.assertEqual(request.full_url, server.OLLAMA_URL + "/api/chat")
+            self.calls.append(json.loads(request.data)["messages"])
+            if self.failure:
+                raise self.failure
+            return io.BytesIO(json.dumps({"message": {"content": self.reply}}).encode())
+
+        previous_model = self.app.model
+        try:
+            self.app.model = server.local_model
+            with patch("server.urllib.request.urlopen", side_effect=ollama):
+                return self.request("/api/labs/4/chat", {"message": message, **extra})
+        finally:
+            self.app.model = previous_model
 
     def native_lab3_chat(self, message, **extra):
         """Exercise production generation with mocked transport and temporary stores."""
