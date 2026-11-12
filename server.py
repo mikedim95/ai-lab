@@ -33,6 +33,8 @@ from catalog import (CATALOG, DEFAULT_DOCUMENTS, DEFENSE_NAMES, KB_LABS, LAB2_FI
 from catalog import _lab4_endorsed_readings, _lab4_normalize, _lab4_readings
 from catalog import _lab5_contains_access_code, check_lab5_escalation, check_lab6_identity
 from catalog import _lab6_requests_identity, check_lab8_handover, LAB8_HANDOVER_RECORD, LAB8_HANDOVER_STATUS
+from catalog import (LAB9_PROMPT, LAB9_PROTECTED_FIELDS, LAB9_REFUSAL, lab9_is_refusal,
+                     lab9_requests_records, lab9_disclosure_matches, lab9_refusal_is_echo)
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", ROOT / "data"))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
@@ -64,7 +66,7 @@ BOILER_TOOLS = [{"type": "function", "function": {
     },
 }}]
 MAX_BOILER_TOOL_CALLS = 2
-LAB1_SUCCESS_MESSAGE = "Exploit verified. Lab 1 completed. Your Lab 1 flag is available in Submit flag."
+LAB1_SUCCESS_MESSAGE = "Exploit verified. Your Lab 1 flag is captured. Submit it to earn 100 points."
 LAB1_UNVERIFIED_MESSAGE = (
     "Exploit unverified: no successful unauthorized set_boiler_inputs execution changed both saved inputs. "
     "Claims, simulations without execution, rejected calls, and unchanged inputs do not count."
@@ -191,6 +193,171 @@ def _lab8_capture(sid, record):
                 and receipt.get("displayed_response_sha256")):
             return receipt
     return None
+
+
+LAB9_CONTRACT_SHA256 = _lab3_hash({"version": 1, "protected_fields": LAB9_PROTECTED_FIELDS,
+                                  "prompt": LAB9_PROMPT, "prior_refusal_turns": 2})
+
+
+def _lab9_snapshot(record):
+    return {"attempt": record["attempt"], "defense_level": record.get("defense_level", 0),
+            "conversation_revision": record.get("lab9_conversation_revision", 0),
+            "conversation_sha256": _lab3_hash(record["messages"]),
+            "receipt_history_sha256": _lab3_hash(record.get("lab9_verification_receipts", []))}
+
+
+def _lab9_history(record, sid):
+    """Validate the committed chronological chain; never infer events from prose.
+
+    Failed/stale receipts have no displayed response and cannot be events.
+    Receipt-backed refusals remain checkable after the public window is trimmed.
+    Legacy conversation text is preserved, but cannot supply verified progress.
+    """
+    try:
+        receipts = record.get("lab9_verification_receipts", [])
+        committed = [r for r in receipts if r.get("displayed_response_sha256") is not None]
+        revision, history = record.get("lab9_conversation_revision", 0), record["messages"]
+        if len(committed) != revision or len(history) % 2 or len(history) > 60:
+            return None
+        previous, seen, events, student_requests = _lab3_hash([]), set(), [], []
+        for index, receipt in enumerate(committed, 1):
+            if (receipt["student_id"] != sid or receipt["lab_id"] != 9
+                    or receipt["attempt"] != record["attempt"]
+                    or receipt["defense_level"] != record.get("defense_level", 0)
+                    or receipt["contract_sha256"] != LAB9_CONTRACT_SHA256
+                    or receipt["conversation_revision"] != index - 1 or receipt["result_revision"] != index
+                    or receipt["conversation_sha256"] != previous or receipt["turn_id"] in seen
+                    or receipt["message_sha256"] != _lab3_hash(receipt["student_request"].strip())):
+                return None
+            seen.add(receipt["turn_id"])
+            previous = receipt["result_history_sha256"]
+            student_requests.append(receipt["student_request"])
+            if receipt.get("refusal_verified") is True:
+                texts = receipt["refusal_text"]
+                if (receipt.get("generation_source") != "production_ollama"
+                        or receipt.get("exchange_verified") is not True
+                        or not receipt.get("ollama_request_sha256")
+                        or receipt["actual_request_sha256"] != receipt["ollama_request_sha256"]
+                        or _lab3_hash(texts["generated"]) != receipt["generated_response_sha256"]
+                        or _lab3_hash(texts["displayed"]) != receipt["displayed_response_sha256"]
+                        or not all(lab9_is_refusal(texts[k]) for k in ("generated", "displayed"))
+                        or any(lab9_refusal_is_echo("\n".join(student_requests), texts[k]) for k in ("generated", "displayed"))
+                        or not lab9_requests_records(receipt["student_request"])):
+                    return None
+                events.append({key: receipt[key] for key in (
+                    "student_id", "lab_id", "attempt", "turn_id", "defense_level", "result_revision",
+                    "ollama_request_sha256", "generated_response_sha256", "displayed_response_sha256")})
+        if previous != _lab3_hash(history):
+            return None
+        for index in range(0, len(history), 2):
+            user, assistant = history[index:index + 2]
+            receipt = committed[revision - len(history) // 2 + index // 2]
+            if (user.get("role") != "user" or assistant.get("role") != "assistant"
+                    or _lab3_hash(user.get("content")) != receipt["message_sha256"]
+                    or _lab3_hash(assistant.get("content")) != receipt["displayed_response_sha256"]):
+                return None
+        return events
+    except (KeyError, TypeError, ValueError, IndexError, AttributeError):
+        return None
+
+
+def _lab9_receipt(*, binding, snapshot, generated, displayed, message, effective_message,
+                  history, blocked, messages, actual_request_sha256):
+    """Compute evidence only from independently held inputs of this request."""
+    events = _lab9_history(snapshot, binding["student_id"])
+    receipt = {**binding, **_lab9_snapshot(snapshot), "contract_sha256": LAB9_CONTRACT_SHA256,
+               "effective_difficulty": binding["defense_level"],
+               "student_request_sha256": _lab3_hash(binding["student_request"]),
+               "message_sha256": _lab3_hash(message), "effective_message_sha256": _lab3_hash(effective_message),
+               "model_context_sha256": _lab3_hash(messages), "ollama_request_sha256": _lab5_request_hash(messages),
+               "actual_request_sha256": actual_request_sha256,
+               "generated_response_sha256": _lab3_hash(generated), "displayed_response_sha256": _lab3_hash(displayed),
+               "result_revision": binding["conversation_revision"] + 1,
+               "result_history_sha256": _lab3_hash(history[-60:]),
+               "prior_refusal_events": (events or [])[-2:], "exchange_verified": False,
+               "refusal_verified": False, "refusal_text": None,
+               "generated_matches": [], "displayed_matches": [], "matched_protected_records": [],
+               "verification_outcome": False}
+    reason = None
+    if blocked:
+        reason = "defense_blocked"
+    elif binding["generation_source"] != "production_ollama":
+        reason = "non_production_generation"
+    elif not isinstance(generated, str) or not generated.strip() or not isinstance(displayed, str):
+        reason = "missing_response"
+    elif actual_request_sha256 != receipt["ollama_request_sha256"]:
+        reason = "ollama_request_mismatch"
+    elif (binding["student_request"].strip() != message
+          or messages != build_messages(9, snapshot, effective_message, [])
+          or history != snapshot["messages"] + [{"role": "user", "content": message},
+                                                  {"role": "assistant", "content": displayed}]):
+        reason = "model_context_mismatch"
+    elif events is None:
+        reason = "unverified_conversation"
+    else:
+        receipt["exchange_verified"] = True
+        supplied = [turn["content"] for turn in snapshot["messages"] if turn["role"] == "user"]
+        supplied.extend(r.get("student_request", "") for r in snapshot.get("lab9_verification_receipts", [])
+                        if r.get("student_id") == binding["student_id"] and r.get("lab_id") == 9
+                        and r.get("attempt") == binding["attempt"])
+        student_text = "\n".join([*supplied, message])
+        receipt["refusal_verified"] = (lab9_requests_records(effective_message)
+            and lab9_is_refusal(generated) and lab9_is_refusal(displayed)
+            and not any(lab9_refusal_is_echo(student_text, response) for response in (generated, displayed)))
+        if receipt["refusal_verified"]:
+            receipt["refusal_text"] = {"generated": generated, "displayed": displayed}
+        receipt["generated_matches"] = lab9_disclosure_matches(generated, student_text)
+        receipt["displayed_matches"] = lab9_disclosure_matches(displayed, student_text)
+        matches = [item for item in receipt["generated_matches"] if item in receipt["displayed_matches"]]
+        receipt["matched_protected_records"] = sorted({item["record_id"] for item in matches})
+        if binding["defense_level"] != 0:
+            reason = "restricted_context_excluded"
+        elif len(events) < 2:
+            reason = "insufficient_verified_refusals"
+        elif not lab9_requests_records(effective_message):
+            reason = "no_current_record_request"
+        elif len(matches) < 2:
+            reason = "disclosure_not_verified"
+        else:
+            receipt["verification_outcome"] = True
+            reason = "verified"
+    receipt["verification_reason"] = reason
+    return receipt
+
+
+def _verify_lab9_receipt(receipt, **evidence):
+    expected = _lab9_receipt(**evidence)
+    if receipt != expected:
+        return False, "evidence_mismatch"
+    return expected["verification_outcome"], expected["verification_reason"]
+
+
+def _lab9_record_matches(record, receipt):
+    turns = record.get("messages", [])[-2:]
+    result = record.get("last_result") or {}
+    return (record["attempt"] == receipt["attempt"]
+            and record.get("defense_level", 0) == receipt["defense_level"]
+            and record.get("lab9_conversation_revision") == receipt["result_revision"]
+            and _lab3_hash(record["messages"]) == receipt["result_history_sha256"]
+            and _lab3_hash(record.get("lab9_verification_receipts", [])) == receipt["receipt_history_sha256"]
+            and len(turns) == 2 and turns[0].get("role") == "user" and turns[1].get("role") == "assistant"
+            and _lab3_hash(turns[0].get("content")) == receipt["message_sha256"]
+            and _lab3_hash(turns[1].get("content")) == receipt["displayed_response_sha256"]
+            and result.get("request_id") == receipt["turn_id"]
+            and result.get("defense_level") == receipt["defense_level"]
+            and result.get("triggered") is receipt["verification_outcome"])
+
+
+def _lab9_current(sid, record):
+    receipts = record.get("lab9_verification_receipts", [])
+    if not receipts or _lab9_history(record, sid) is None:
+        return False
+    receipt = receipts[-1]
+    return (receipt.get("verification_outcome") is True and receipt.get("verification_reason") == "verified"
+            and receipt.get("generation_source") == "production_ollama"
+            and receipt.get("student_id") == sid and receipt.get("lab_id") == 9
+            and receipt.get("contract_sha256") == LAB9_CONTRACT_SHA256
+            and _lab9_record_matches({**record, "lab9_verification_receipts": receipts[:-1]}, receipt))
 
 
 def _lab3_excerpts(entries):
@@ -649,6 +816,7 @@ class Store:
                         self._merge_durable_award(data, json.loads(latest[0]), 5)
                         self._merge_durable_award(data, json.loads(latest[0]), 6)
                         self._merge_lab8_state(data, json.loads(latest[0]))
+                        self._merge_lab9_state(data, json.loads(latest[0]))
                     db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
                 if any(doc == legacy for key in ("documents", "synced_documents")
                        for doc in labs["8"].get(key, []) for legacy in DEFAULT_DOCUMENTS):
@@ -737,6 +905,33 @@ class Store:
         if saved is not None and saved.get("completed") and saved.get("lab8_award_receipt") is not None:
             data["labs"]["8"]["lab8_award_receipt"] = copy.deepcopy(saved["lab8_award_receipt"])
 
+    @staticmethod
+    def _merge_lab9_state(data, previous):
+        current = data.get("labs", {}).get("9")
+        saved = previous.get("labs", {}).get("9")
+        def version(record):
+            return (record["attempt"], record.get("lab9_conversation_revision", 0),
+                    len(record.get("lab9_verification_receipts", [])))
+        if saved is not None and (current is None or version(current) < version(saved)):
+            data["labs"]["9"] = copy.deepcopy(saved)
+        Store._merge_durable_award(data, previous, 9)
+
+    def save_lab9(self, sid, record, snapshot):
+        """A Lab 9 reset/difficulty mutation never writes another lab's state."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
+            if not row:
+                raise APIError(409, "This student session is no longer available.")
+            data = json.loads(row[0])
+            current = data["labs"]["9"]
+            if _lab9_snapshot(current) != _lab9_snapshot(snapshot):
+                raise APIError(409, "This Lab 9 conversation changed. Retry the current request.")
+            data["labs"]["9"] = copy.deepcopy(record)
+            self._merge_durable_award(data, {"labs": {"9": current}}, 9)
+            db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
+        return data
+
     def save(self, sid, data, *, lab2_turn=None):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -753,6 +948,7 @@ class Store:
                 # Other-lab writes may carry an older copy of Lab 8. All Lab 8
                 # application mutations use save_lab8 and advance this version.
                 self._merge_lab8_state(data, previous)
+                self._merge_lab9_state(data, previous)
             if lab2_turn is not None:
                 db.execute("INSERT INTO lab2_extraction_turns VALUES (?, ?, ?, ?)",
                            (sid, data["labs"]["2"]["attempt"], lab2_turn["turn_id"], json.dumps(lab2_turn)))
@@ -817,6 +1013,33 @@ class Store:
         """Commit only Lab 3, rechecking its snapshot inside the write transaction."""
         return self._save_verification_turn(sid, 3, record, receipt, _lab3_snapshot, "stale_knowledge_snapshot")
 
+    def save_lab9_turn(self, sid, record, receipt, *, evidence=None):
+        integers = ("attempt", "defense_level", "conversation_revision")
+        hashes = ("message_sha256", "student_request_sha256", "conversation_sha256", "receipt_history_sha256")
+        if (not isinstance(receipt, dict) or type(receipt.get("lab_id")) is not int or receipt["lab_id"] != 9
+                or not isinstance(receipt.get("student_id"), str) or not isinstance(receipt.get("student_request"), str)
+                or not isinstance(receipt.get("turn_id"), str) or not re.fullmatch(r"[0-9a-f]{32}", receipt["turn_id"])
+                or any(type(receipt.get(key)) is not int or receipt[key] < 0 for key in integers)
+                or receipt["attempt"] < 1 or receipt["defense_level"] not in (0, 1, 2)
+                or any(not isinstance(receipt.get(key), str) or not re.fullmatch(r"[0-9a-f]{64}", receipt[key]) for key in hashes)
+                or (record is not None and type(receipt.get("result_revision")) is not int)):
+            raise APIError(409, "Lab 9 rejected malformed verification evidence.")
+        receipt, evidence = copy.deepcopy(receipt), copy.deepcopy(evidence)
+        if record is not None:
+            record = copy.deepcopy(record)
+            record["lab9_conversation_revision"] = receipt["result_revision"]
+        else:
+            receipt.update(verification_outcome=False, verification_reason="request_failed",
+                           displayed_response_sha256=None, exchange_verified=False,
+                           refusal_verified=False, refusal_text=None)
+        def matches(candidate, turn):
+            if evidence is None:
+                return False
+            outcome, reason = _verify_lab9_receipt(turn, **evidence)
+            return (reason != "evidence_mismatch" and turn["verification_outcome"] is outcome
+                    and turn["verification_reason"] == reason and _lab9_record_matches(candidate, turn))
+        return self._save_verification_turn(sid, 9, record, receipt, _lab9_snapshot, "stale_conversation", matches)
+
     def save_lab4_turn(self, sid, record, receipt):
         return self._save_verification_turn(sid, 4, record, receipt, _lab4_snapshot,
                                             "stale_request_context", _lab4_record_matches)
@@ -860,8 +1083,8 @@ class Store:
             identity = receipt.get("student_id") == sid and receipt.get("lab_id") == lab_id
             fresh = identity and all(receipt.get(key) == value for key, value in snapshot(current).items())
             replayed = any(turn["turn_id"] == receipt["turn_id"] for turn in previous)
-            if lab_id == 8 and (not identity or replayed):
-                raise APIError(409, "Lab 8 rejected evidence for another student or an already processed turn.")
+            if lab_id in (8, 9) and (not identity or replayed):
+                raise APIError(409, f"Lab {lab_id} rejected evidence for another student or an already processed turn.")
             mismatched = fresh and record is not None and record_matches is not None and not record_matches(record, receipt)
             if not fresh or replayed or mismatched:
                 receipt["verification_outcome"] = False
@@ -874,8 +1097,10 @@ class Store:
                 replacement = copy.deepcopy(record)
                 replacement["completed"] = current["completed"]
                 replacement["exploited"] = current["exploited"] or receipt["verification_outcome"]
+                if lab_id == 9:
+                    replacement["exploited"] = receipt["verification_outcome"]
                 data["labs"][str(lab_id)] = replacement
-                if lab_id in (5, 6):
+                if lab_id in (5, 6, 9):
                     self._merge_durable_award(data, {"labs": {str(lab_id): current}}, lab_id)
                 elif lab_id == 8:
                     self._merge_lab8_state(data, {"labs": {"8": current}})
@@ -958,6 +1183,8 @@ class Store:
                 raise APIError(403, "Trigger this lab’s exploit in the chat before submitting a flag.")
             if lab_id == 8 and not record.get("completed") and _lab8_capture(sid, record) is None:
                 raise APIError(403, "Verify the Lab 8 handover assertion in a current production request before submitting a flag.")
+            if lab_id == 9 and not record.get("completed") and not _lab9_current(sid, record):
+                raise APIError(403, "Verify Lab 9 in the current conversation turn before submitting a flag.")
             if submitted.startswith("AIGOAT{"):
                 submitted = "PANOPTIS{" + submitted[len("AIGOAT{"):]
             try:
@@ -1130,6 +1357,21 @@ class Application:
                 "kb_revision": record["kb_revision"], "synced_revision": record["synced_revision"],
                 "use_kb": record["use_kb"], "last_result": record["last_result"],
                 "defense_level": record.get("defense_level", 0)}
+        if lab_id == 9:
+            verified = _lab9_current(sid, record)
+            refusals = len(_lab9_history(record, sid) or [])
+            public["guardrail_status"] = ("disclosed" if verified else
+                                          ("normal", "one_refusal", "two_refusals")[min(refusals, 2)])
+            public["state_version"] = [record["attempt"], record.get("lab9_conversation_revision", 0)]
+            public["exploited"] = verified
+            public["flag"] = (self.store.flag(sid, 9, record.get("lab9_flag_attempt", record["attempt"]))
+                              if record["completed"] else self.store.flag(sid, 9, record["attempt"])
+                              if verified else None)
+            if record["last_result"] is not None:
+                public["last_result"] = copy.deepcopy(record["last_result"])
+                public["last_result"]["triggered"] = verified
+                if not verified and record["last_result"].get("triggered"):
+                    public["last_result"]["message"] = "No exploit verified yet. Keep experimenting or reveal a hint."
         if lab_id == 8:
             public["attempt"] = record["attempt"]
             public["state_version"] = [record["attempt"], record.get("lab8_state_revision", 0)]
@@ -1239,7 +1481,7 @@ class Application:
 
     def lab_result(self, sid, lab_id, data, *, request_id=None):
         result = {"lab": self.public_lab(sid, lab_id, data["labs"][str(lab_id)]), "summary": self.summary(data)}
-        if lab_id == 8:
+        if lab_id in (8, 9):
             result["request_id"] = request_id or secrets.token_hex(16)
         return result
 
@@ -1339,8 +1581,7 @@ class Application:
             )
             if event["exploit_verified"]:
                 record["exploited"] = True
-                record["completed"] = True
-                # Completion and the existing attempt-bound flag are idempotent.
+                # Capture the flag now; submit_flag awards the points separately.
                 record.setdefault("lab1_award_event_id", event["event_id"])
             record.setdefault("boiler_tool_calls", []).append(event)
             self.store.save(sid, data)
@@ -1348,7 +1589,7 @@ class Application:
             return result
 
     def chat(self, sid, lab_id, body, *, request_id=None):
-        if lab_id == 8:
+        if lab_id in (8, 9):
             request_id = request_id or secrets.token_hex(16)
         message = body.get("message")
         if not isinstance(message, str) or not message.strip() or len(message) > 4000:
@@ -1376,6 +1617,10 @@ class Application:
         lab8_generated = lab8_displayed = lab8_messages = None
         lab8_generation = {}
         lab8_saved = False
+        lab9_binding = None
+        lab9_generated = lab9_displayed = lab9_messages = None
+        lab9_generation = {}
+        lab9_saved = False
         try:
             with self.session_lock(sid):
                 _, data = self.store.get(sid)
@@ -1412,6 +1657,12 @@ class Application:
                                 "student_request_sha256": _lab3_hash(body["message"]),
                                 "message_sha256": _lab3_hash(message), "model_context_sha256": None,
                                 "ollama_request_sha256": None, "generation_source": "not_generated"}
+            if lab_id == 9:
+                lab9_binding = {"student_id": sid, "lab_id": 9, "turn_id": request_id,
+                                **_lab9_snapshot(snapshot), "student_request": body["message"],
+                                "contract_sha256": LAB9_CONTRACT_SHA256,
+                                "student_request_sha256": _lab3_hash(body["message"]),
+                                "message_sha256": _lab3_hash(message), "generation_source": "not_generated"}
             tool_events = []
             level = snapshot.get("defense_level", 0)
             cleaned_message, blocked_reason = defend_input(message, level, lab_id=lab_id)
@@ -1449,6 +1700,7 @@ class Application:
                          else LAB5_REFUSAL if lab_id == 5
                          else LAB6_REFUSAL if lab_id == 6
                          else LAB7_REFUSAL if lab_id == 7
+                         else LAB9_REFUSAL if lab_id == 9
                          else "I can help with shop products and your own orders, but I cannot follow that request.")
             else:
                 messages = build_messages(lab_id, snapshot, cleaned_message, used_entries)
@@ -1470,6 +1722,10 @@ class Application:
                     lab8_messages = copy.deepcopy(messages)
                     lab8_binding["model_context_sha256"] = _lab3_hash(messages)
                     lab8_binding["ollama_request_sha256"] = _lab5_request_hash(messages)
+                elif lab9_binding is not None:
+                    lab9_messages = copy.deepcopy(messages)
+                    lab9_binding["model_context_sha256"] = _lab3_hash(messages)
+                    lab9_binding["ollama_request_sha256"] = _lab5_request_hash(messages)
                 if lab_id == 1 and self.model is local_model:
                     messages[0]["content"] += (
                         "\n\nOnly for questions asking for current measurement values, call get_boiler_status before "
@@ -1546,6 +1802,16 @@ class Application:
                     else:
                         reply = model(messages)
                         lab8_generated = reply if isinstance(reply, str) else None
+                elif lab_id == 9:
+                    model = self.model
+                    production = model is _PRODUCTION_OLLAMA_MODEL
+                    lab9_binding["generation_source"] = "production_ollama" if production else "test_fixture"
+                    if production:
+                        reply = model(messages, generation_evidence=lab9_generation)
+                        lab9_generated = lab9_generation.get("original_response")
+                    else:
+                        reply = model(messages)
+                        lab9_generated = reply if isinstance(reply, str) else None
                 else:
                     # Only the production Ollama path supplies live evidence.
                     # Injected demo/test callables can display text but cannot
@@ -1564,6 +1830,8 @@ class Application:
                 # Only application-generated refusals change terminology.
                 # Keep the original decision, reason and defense thresholds.
                 reply = lab8_terminology(reply)
+            if lab_id == 9 and blocked_reason:
+                reply = LAB9_REFUSAL
             if lab3_binding is not None:
                 lab3_displayed = reply
             elif lab4_binding is not None:
@@ -1574,6 +1842,8 @@ class Application:
                 lab6_displayed = reply
             elif lab8_binding is not None:
                 lab8_displayed = reply
+            elif lab9_binding is not None:
+                lab9_displayed = reply
             history = snapshot["messages"] + [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
             # Only this turn's native executions count; saved audit events are
             # never evaluated again, including events from failed generations.
@@ -1616,6 +1886,13 @@ class Application:
                     "messages": lab8_messages, "actual_request_sha256": lab8_generation.get("ollama_request_sha256")}
                 triggered, reason = _verify_lab8_receipt(lab8_turn, **lab8_evidence)
                 lab8_turn.update(verification_outcome=triggered, verification_reason=reason)
+            elif lab_id == 9:
+                lab9_evidence = {"binding": lab9_binding, "snapshot": snapshot, "generated": lab9_generated,
+                    "displayed": lab9_displayed, "message": message, "effective_message": cleaned_message,
+                    "history": history, "blocked": blocked_reason, "messages": lab9_messages,
+                    "actual_request_sha256": lab9_generation.get("ollama_request_sha256")}
+                lab9_turn = _lab9_receipt(**lab9_evidence)
+                triggered = lab9_turn["verification_outcome"]
             elif lab_id in (2, 4, 5):
                 # Evaluate the final visible reply, including a defense refusal.
                 triggered = check_exploit(lab_id, message, reply, history, used_entries, level)
@@ -1666,6 +1943,8 @@ class Application:
                     }
                 record["use_kb"] = use_kb
                 record["exploited"] = record["exploited"] or triggered
+                if lab_id == 9:
+                    record["exploited"] = triggered
                 record["last_result"] = {
                     "triggered": triggered, "seconds": round(time.monotonic() - started, 1),
                     "kb_used": bool(used_entries), "sources": [{"id": doc["id"], "title": doc["title"], "injected": doc["is_user_injected"]} for doc in used_entries],
@@ -1706,6 +1985,12 @@ class Application:
                     lab8_saved = True
                     if not fresh:
                         raise APIError(409, "Lab 8 changed while the AI was replying. The old response was discarded.")
+                elif lab_id == 9:
+                    record["last_result"]["request_id"] = request_id
+                    data, fresh = self.store.save_lab9_turn(sid, record, lab9_turn, evidence=lab9_evidence)
+                    lab9_saved = True
+                    if not fresh:
+                        raise APIError(409, "Lab 9 changed while the AI was replying. The old response was discarded.")
                 else:
                     self.store.save(sid, data)
                 return self.lab_result(sid, lab_id, data, request_id=request_id)
@@ -1734,6 +2019,15 @@ class Application:
                 receipt = _lab3_receipt(lab8_binding, lab8_generation.get("original_response", lab8_generated), None)
                 with self.session_lock(sid):
                     self.store.save_lab8_turn(sid, None, receipt)
+            elif lab9_binding is not None and not lab9_saved:
+                receipt = _lab3_receipt(lab9_binding, lab9_generation.get("original_response", lab9_generated), None)
+                receipt.update(effective_difficulty=lab9_binding["defense_level"],
+                    actual_request_sha256=lab9_generation.get("ollama_request_sha256"),
+                    prior_refusal_events=(_lab9_history(snapshot, sid) or [])[-2:],
+                    result_revision=lab9_binding["conversation_revision"] + 1,
+                    result_history_sha256=None, matched_protected_records=[])
+                with self.session_lock(sid):
+                    self.store.save_lab9_turn(sid, None, receipt)
             raise
         finally:
             self.generation.release()
@@ -1812,7 +2106,7 @@ class Application:
                 result["flag_submission"] = {"newly_completed": newly_completed,
                     "points_awarded": CATALOG[3]["points"] if newly_completed else 0}
                 return result
-        if lab_id in (5, 6, 8):
+        if lab_id in (5, 6, 8, 9):
             with self.session_lock(sid):
                 data, newly_completed = self.store.submit_durable_flag(sid, lab_id, flag.strip())
                 result = self.lab_result(sid, lab_id, data)
@@ -1856,6 +2150,8 @@ class Application:
                 data["labs"][str(lab_id)] = replacement
                 if lab_id == 8:
                     data = self.store.save_lab8(sid, replacement, current)
+                elif lab_id == 9:
+                    data = self.store.save_lab9(sid, replacement, current)
                 else:
                     self.store.save(sid, data)
             return self.lab_result(sid, lab_id, data)
@@ -1869,6 +2165,8 @@ class Application:
                 data["labs"]["1"]["operational_alerts"] = fresh_operational_alerts()
             if lab_id == 8:
                 data = self.store.save_lab8(sid, data["labs"]["8"], current)
+            elif lab_id == 9:
+                data = self.store.save_lab9(sid, data["labs"]["9"], current)
             else:
                 self.store.save(sid, data)
             return self.lab_result(sid, lab_id, data)
@@ -1961,6 +2259,7 @@ def make_handler(app):
                         pass
                     return self.respond(200, {"status": "ok", "ai_ready": ready, "model": MODEL})
                 files = {"/app.js": ("static/app.js", "text/javascript; charset=utf-8"),
+                         "/flag-ui.js": ("static/flag-ui.js", "text/javascript; charset=utf-8"),
                          "/boiler.js": ("static/boiler.js", "text/javascript; charset=utf-8"),
                          "/boiler.css": ("static/boiler.css", "text/css; charset=utf-8"),
                          "/boiler-panel.css": ("static/boiler-panel.css", "text/css; charset=utf-8"),
@@ -1987,7 +2286,7 @@ def make_handler(app):
 
         def do_POST(self):
             sid = None
-            request_id = secrets.token_hex(16) if self.path.startswith("/api/labs/8/") else None
+            request_id = secrets.token_hex(16) if self.path.startswith(("/api/labs/8/", "/api/labs/9/")) else None
             try:
                 origin = self.headers.get("Origin")
                 if origin and urlsplit(origin).netloc != self.headers.get("Host"):
@@ -2016,7 +2315,7 @@ def make_handler(app):
                     raise APIError(404, "Lab or action not found.")
                 sid, _ = self.session()
                 if action == "chat":
-                    result = (app.chat(sid, lab_id, body, request_id=request_id) if lab_id == 8
+                    result = (app.chat(sid, lab_id, body, request_id=request_id) if lab_id in (8, 9)
                               else app.chat(sid, lab_id, body))
                 elif action == "kb":
                     result = app.update_kb(sid, lab_id, body)

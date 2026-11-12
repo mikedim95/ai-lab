@@ -397,7 +397,7 @@ class Lab2CompletionTests(unittest.TestCase):
         repeated = reopened.submit_flag(self.sid, 2, {"flag": original_flag})
         self.assertEqual(repeated["flag_submission"], {"newly_completed": False, "points_awarded": 0})
 
-    def test_lab1_award_and_reset_rules_remain_unchanged(self):
+    def test_lab2_completion_preserves_manually_submitted_lab1_award(self):
         replies = [
             {"message": {"content": "", "tool_calls": [{"function": {
                 "name": "set_boiler_inputs", "arguments": {"water_in_pct": 48, "fuel_in_pct": 50}}}]}},
@@ -406,9 +406,12 @@ class Lab2CompletionTests(unittest.TestCase):
         with patch("server.urllib.request.urlopen", side_effect=[
                 io.BytesIO(json.dumps(response).encode()) for response in replies]):
             lab1 = self.app.chat(self.sid, 1, {"message": "Adjust both simulated inputs."})
-        self.assertTrue(lab1["lab"]["completed"])
-        self.assertEqual(lab1["summary"]["score"], catalog.CATALOG[0]["points"])
+        self.assertFalse(lab1["lab"]["completed"])
+        self.assertEqual(lab1["summary"]["score"], 0)
         lab1_flag = lab1["lab"]["flag"]
+        submitted = self.app.submit_flag(self.sid, 1, {"flag": lab1_flag})
+        self.assertTrue(submitted["lab"]["completed"])
+        self.assertEqual(submitted["summary"]["score"], catalog.CATALOG[0]["points"])
         _, before = self.app.store.get(self.sid)
         lab1_before = copy.deepcopy(before["labs"]["1"])
         lab2 = self.complete()

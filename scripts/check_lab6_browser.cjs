@@ -35,7 +35,8 @@ async function main() {
       fixture.once('error',reject);
       fixture.once('exit',code=>{clearTimeout(timer);reject(new Error(`Fixture exited: ${code}`));});
     });
-    browser=await chromium.launch({headless:true});
+    browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH
+      ? {executablePath:process.env.CHROMIUM_PATH,args:['--no-sandbox']} : {})});
     for (const [name,viewport] of Object.entries({desktop:{width:1440,height:1000},
       desktopShort:{width:1280,height:600},mobile:{width:390,height:844},mobileSmall:{width:360,height:740}})) {
       const context=await browser.newContext({viewport});
@@ -111,12 +112,16 @@ async function main() {
         flag=result.lab.flag;
         assert.equal(result.summary.score,0);
         assert.equal(await explanation.evaluate(el=>el.hidden),true);
-        await page.waitForFunction(()=>document.querySelector('#flag-dialog').open);
+        await page.waitForFunction(()=>document.querySelector('#flag-capture-dialog').open);
+        await page.locator('#copy-captured-flag').click();
+        await page.waitForFunction(()=>!document.querySelector('#flag-capture-dialog').open);
+        assert.equal(await page.locator('#visible-captured-flag').innerText(),flag);
+        await page.locator('#flag-button').click();
         await page.locator('#flag-input').fill('PANOPTIS{wrong}');
         await page.locator('#submit-flag').click();
         await page.waitForFunction(()=>document.querySelector('#flag-feedback').textContent.includes('does not match'));
         assert.equal(await explanation.evaluate(el=>el.hidden),true);
-        await page.locator('#use-captured-flag').click();
+        await page.locator('#flag-input').fill(flag);
         await page.locator('#submit-flag').click();
         await page.waitForFunction(()=>!document.querySelector('#lab6-completion-explanation').hidden);
         assert.match(await explanation.innerText(),/No real equipment permissions were granted/);

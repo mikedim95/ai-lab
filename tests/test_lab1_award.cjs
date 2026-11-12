@@ -34,7 +34,7 @@ function studentUI(lab = 1, completed = true) {
     get: id => elements.get(id), opened: () => opened };
 }
 
-test('Lab 1 keeps the real captured flag and normal submission available after automatic completion', () => {
+test('previously completed Lab 1 keeps its earned flag and existing submission available', () => {
   const ui = studentUI();
   assert.equal(ui.get('flag-button').textContent, '✓ Completed');
   assert.equal(ui.get('captured-panel').hidden, false);
@@ -44,15 +44,15 @@ test('Lab 1 keeps the real captured flag and normal submission available after a
   assert.equal(ui.get('award-points').hidden, true);
 });
 
-test('fresh verified success opens the existing flag dialog and displays completion', () => {
+test('fresh verified capture opens the flag popup without awarding points', () => {
   const ui = studentUI(1, false);
-  ui.context.response = { lab: { completed: true, exploited: true,
-    flag: 'PANOPTIS{verified-flag}', boiler_version: [1, 2] }, summary: { score: 100, completed: [1] } };
+  ui.context.response = { lab: { completed: false, exploited: true,
+    flag: 'PANOPTIS{verified-flag}', boiler_version: [1, 2] }, summary: { score: 0, completed: [] } };
   ui.run('acceptResponse(1, response)');
   assert.equal(ui.opened(), 1);
-  assert.equal(ui.get('flag-heading').textContent, 'Lab complete.');
+  assert.equal(ui.get('flag-heading').textContent, 'You found the flag.');
   assert.equal(ui.get('captured-flag').textContent, 'PANOPTIS{verified-flag}');
-  assert.equal(ui.run('state.summary.score'), 100);
+  assert.equal(ui.run('state.summary.score'), 0);
 });
 
 test('normal flag resubmission reports acceptance without claiming another points award', async () => {

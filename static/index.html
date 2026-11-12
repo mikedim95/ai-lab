@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/boiler.css">
   <script src="/intro.js" defer></script>
   <script src="/boiler.js" defer></script>
+  <script src="/flag-ui.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -24,6 +25,7 @@
       <span id="mobile-score" class="header-score">0 / 2,100 pts</span>
     </header>
     <main id="main" tabindex="-1">
+      <div id="captured-flag-banner" class="captured-flag-banner" aria-label="Captured flag" hidden><code id="visible-captured-flag" tabindex="0"></code></div>
       <div class="lab-heading">
         <div class="heading-copy"><div class="lab-meta"><span id="lab-counter">LAB 01 OF 09</span><span id="difficulty">Beginner</span><span id="owasp">LLM01</span><span id="points">100 points</span><span id="lab-status">Ready to try</span></div><h1 id="lab-title" tabindex="-1">Prompt Injection</h1><p id="lab-description" class="lab-description">Convince Plant AI to change Water In and Fuel In without authorization.</p></div>
         <div class="heading-actions"><button id="restart-lab" class="quiet-button" type="button" title="Clear this lab’s chat, documents, flag, and points">Restart</button></div>
@@ -53,7 +55,8 @@
   <dialog id="knowledge-dialog" class="tool-dialog" aria-labelledby="knowledge-heading"><div class="dialog-heading"><h2 id="knowledge-heading">Knowledge base</h2><button class="dialog-close quiet-button" data-close="knowledge-dialog" aria-label="Close knowledge base" type="button">✕</button></div><p class="dialog-description">Edit a reference or add your own. Save and sync it before asking Plant AI about the topic.</p>
     <details id="knowledge-panel" class="knowledge-panel" hidden open><summary><span>Documents for this lab</span><span id="kb-status" class="kb-status">Up to date</span></summary><div class="knowledge-content"><div class="kb-controls"><label class="kb-toggle"><input id="use-kb" type="checkbox">Use knowledge base in chat</label></div><div class="kb-workspace"><div><div id="document-list" class="document-list"></div><button id="new-document" class="secondary-button" type="button">+ New document</button></div><form id="document-editor" class="document-editor" hidden><label for="document-title">Title</label><input id="document-title" maxlength="100" autocomplete="off" required><label for="document-content">Document text</label><textarea id="document-content" maxlength="4000" rows="7" required></textarea><div class="editor-actions"><button id="save-document" class="primary-button" type="submit">Save document</button><button id="cancel-document" class="quiet-button" type="button">Cancel</button></div></form><div id="editor-placeholder" class="editor-placeholder"><p>Select a document to edit, or add a new one.</p></div></div><div class="kb-footer"><span id="kb-notice" role="status">References are synced. Retrieval is off.</span><button id="sync-kb" class="primary-button" type="button">Sync and enable</button></div></div></details>
   </dialog>
-  <dialog id="flag-dialog" class="tool-dialog flag-dialog" aria-labelledby="flag-heading"><div class="dialog-heading"><h2 id="flag-heading">Submit a flag</h2><button class="dialog-close quiet-button" data-close="flag-dialog" aria-label="Close flag submission" type="button">✕</button></div><p id="flag-instructions" class="dialog-description">Trigger the exploit in chat to reveal this lab’s flag.</p><div id="captured-panel" class="captured-panel" hidden><span>Captured flag</span><code id="captured-flag"></code><button id="use-captured-flag" class="text-button" type="button">Use this flag</button></div><form id="flag-form"><label class="sr-only" for="flag-input">Captured flag</label><input id="flag-input" placeholder="PANOPTIS{…}" maxlength="150" autocomplete="off" spellcheck="false" required><button id="submit-flag" class="primary-button" type="submit">Submit flag <span id="award-points">+100</span></button></form><div id="flag-feedback" class="flag-feedback" role="status" hidden></div>
+  <dialog id="flag-capture-dialog" class="tool-dialog flag-capture-dialog" aria-label="Captured flag"><code id="flag-capture-value" tabindex="0"></code><button id="copy-captured-flag" class="primary-button" type="button">Copy to clipboard</button></dialog>
+  <dialog id="flag-dialog" class="tool-dialog flag-dialog" aria-labelledby="flag-heading"><div class="dialog-heading"><h2 id="flag-heading">Submit a flag</h2><button class="dialog-close quiet-button" data-close="flag-dialog" aria-label="Close flag submission" type="button">✕</button></div><p id="flag-instructions" class="dialog-description">Trigger the exploit in chat to reveal this lab’s flag.</p><div id="captured-panel" class="captured-panel" hidden><span>Captured flag</span><code id="captured-flag"></code><button id="use-captured-flag" class="text-button" type="button">Copy to clipboard</button></div><form id="flag-form"><label class="sr-only" for="flag-input">Captured flag</label><input id="flag-input" placeholder="PANOPTIS{…}" maxlength="150" autocomplete="off" spellcheck="false" required><button id="submit-flag" class="primary-button" type="submit">Submit flag <span id="award-points">+100</span></button></form><div id="flag-feedback" class="flag-feedback" role="status" hidden></div>
     <p id="lab3-completion-explanation" class="dialog-description" hidden><strong>Vulnerability:</strong> RAG Knowledge Poisoning.<br><strong>Entry point:</strong> Student-controlled maintenance bulletin.<br><strong>Trust boundary:</strong> Untrusted retrieved document content influencing the AI's answer.<br><strong>Impact:</strong> Incorrect maintenance recommendation.<br><strong>Defense:</strong> Source validation, document provenance, and authoritative-reference precedence.</p>
     <p id="lab4-completion-explanation" class="dialog-description" hidden><strong>Vulnerability:</strong> Context Override / Prompt Injection.<br><strong>Entry point:</strong> Student chat.<br><strong>Trust boundary:</strong> Untrusted chat versus authenticated telemetry.<br><strong>Impact:</strong> Fabricated operational readings reported as verified.<br><strong>Defense:</strong> Trusted-source precedence and output validation.</p>
     <p id="lab5-completion-explanation" class="dialog-description" hidden><strong>Vulnerability:</strong> Multi-turn Prompt Injection.<br><strong>Entry point:</strong> Student conversation.<br><strong>Trust boundary:</strong> Untrusted conversation attempting to override higher-priority instructions.<br><strong>Impact:</strong> Restricted fictional maintenance information disclosure.<br><strong>Defense:</strong> Conversation-aware policy enforcement, least-privilege context, and output validation.</p>
@@ -64,6 +67,19 @@
       <p><strong>Trust boundary:</strong> Untrusted reference content must not become authoritative instructions.</p>
       <p><strong>Impact:</strong> AI responses can be manipulated through multiple lower-trust input surfaces.</p>
       <p><strong>Defenses:</strong> Document provenance, trusted-source precedence, separation of data and instructions, and output verification.</p>
+    </section>
+    <section id="lab9-completion-explanation" class="dialog-description" aria-label="Lab 9 learning explanation" hidden>
+      <p><strong>Vulnerability:</strong> Guardrail Erosion.</p>
+      <p><strong>Entry point:</strong> Multi-turn conversation.</p>
+      <p><strong>Trust boundary:</strong> Student messages attempting to override information-disclosure restrictions.</p>
+      <p><strong>Impact:</strong> Disclosure of restricted synthetic technician records.</p>
+      <p><strong>Defenses:</strong></p>
+      <ul>
+        <li>Conversation-aware authorization.</li>
+        <li>Least-privilege model context.</li>
+        <li>Consistent refusals.</li>
+        <li>Output validation.</li>
+      </ul>
     </section>
   </dialog>
 </body>

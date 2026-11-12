@@ -87,6 +87,33 @@ function lab2Progress(record) {
   return { count, completed: count === 3 && record.extraction_completed === true };
 }
 
+function lab9Version(record) {
+  const version = record?.state_version;
+  return record?.id === 9 && Array.isArray(version) && version.length === 2
+    && version.every(part => Number.isSafeInteger(part) && part >= 0) && version[0] > 0
+    ? version : null;
+}
+
+function staleLab9Response(current, incoming) {
+  if (current?.completed === true && incoming?.completed !== true) return true;
+  const before = lab9Version(current);
+  const after = lab9Version(incoming);
+  if (!before) return false;
+  return !after || after[0] < before[0] || (after[0] === before[0] && after[1] < before[1]);
+}
+
+function lab9Progress(record) {
+  const states = [
+    ['normal', 'Normal conversation.'],
+    ['one_refusal', 'One verified refusal.'],
+    ['two_refusals', 'Two verified refusals.'],
+    ['disclosed', 'Verified restricted-record disclosure.'],
+  ];
+  const index = lab9Version(record) ? states.findIndex(([status]) => status === record.guardrail_status) : 0;
+  const step = Math.max(0, index);
+  return { status: states[step][0], label: states[step][1], step };
+}
+
 async function api(path, body) {
   const options = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
   let response;
@@ -347,6 +374,7 @@ function drawConversation() {
   if (record.last_result && !pending) {
     const result = record.last_result;
     const verified = state.current === 6 ? result.triggered === true && result.identity_status === 'adopted'
+      : state.current === 9 ? lab9Progress(record).status === 'disclosed'
       : state.current === 5 || state.current === 8 ? result.triggered === true
       : state.current === 1 || state.current === 2 || state.current === 4 ? result.triggered : record.exploited;
     $('attempt-result').className = `attempt-result${verified ? ' success' : result.defense_blocked ? ' blocked' : ''}`;
@@ -354,6 +382,7 @@ function drawConversation() {
       : state.current === 5 ? lab5Feedback(result)
       : state.current === 6 ? lab6Feedback(result)
       : state.current === 8 ? lab8ReplyFeedback(result)
+      : state.current === 9 ? lab9Progress(record).label
       : state.current === 2 && record.exploited && !result.triggered && !result.defense_blocked
       ? 'This reply did not verify an extraction. Your previously captured flag and any earned points are still saved.'
       : result.message;
@@ -370,7 +399,7 @@ function drawConversation() {
       }
     } else if (result.defense_blocked) lines.append(node('li', '', [4, 5, 6].includes(state.current)
       ? 'The selected defenses blocked this attempt.' : result.defense_reason || 'The selected defenses blocked this attempt.'));
-    else lines.append(node('li', '', (state.current === 6 ? verified : result.triggered) ? 'Exploit verified.' : 'No exploit detected.'));
+    else lines.append(node('li', '', ([6, 9].includes(state.current) ? verified : result.triggered) ? 'Exploit verified.' : 'No exploit detected.'));
     if (metadata().has_kb) {
       if (state.current === 8) {
         $('attempt-result').append(node('p', 'lab8-retrieval-summary', lab8RetrievalFeedback(result)),
@@ -394,6 +423,7 @@ function drawConversation() {
     details.append(lines);
     $('attempt-result').append(details);
   }
+  if (state.current === 9) drawLab9Progress();
 }
 
 function drawHints() {
@@ -410,13 +440,14 @@ function drawHints() {
 function drawFlag() {
   const record = currentLab();
   const hideSubmission = record.completed && state.current !== 1;
-  const captured = record.exploited || ([3, 4, 5, 6, 8].includes(state.current) && record.completed === true && Boolean(record.flag));
-  $('flag-button').textContent = record.completed ? '✓ Completed' : record.exploited ? 'Flag captured' : 'Submit flag';
+  const captured = record.exploited || ([3, 4, 5, 6, 8, 9].includes(state.current) && record.completed === true && Boolean(record.flag));
+  $('flag-button').textContent = record.completed ? '✓ Completed' : 'Submit flag';
   $('flag-button').className = `tool-button${record.exploited ? ' captured' : ''}`;
   $('flag-heading').textContent = record.completed ? 'Lab complete.' : record.exploited ? 'You found the flag.' : 'Find it. Submit it.';
-  $('flag-instructions').textContent = record.completed ? `${metadata().points} points earned. You can keep experimenting or move to the next lab.` : record.exploited ? 'The server verified the exploit. Use the captured flag below to claim your points.' : 'Trigger the exploit in chat to reveal this lab’s flag. Submit it here to earn the points.';
+  $('flag-instructions').textContent = record.completed ? `${metadata().points} points earned. You can keep experimenting or move to the next lab.` : record.exploited ? 'Paste the captured flag below and press Submit flag to earn the points.' : 'Trigger the exploit in chat to reveal this lab’s flag. Submit it here to earn the points.';
   $('captured-panel').hidden = !captured;
   $('captured-flag').textContent = record.flag || '';
+  globalThis.FlagPresentation?.render(captured ? record.flag : null);
   $('use-captured-flag').hidden = hideSubmission;
   $('flag-form').hidden = hideSubmission;
   $('flag-input').value = state.flagDrafts.get(state.current) || '';
@@ -431,6 +462,7 @@ function drawFlag() {
   $('lab5-completion-explanation').hidden = !(state.current === 5 && record.completed === true);
   $('lab6-completion-explanation').hidden = !(state.current === 6 && record.completed === true);
   $('lab8-completion-explanation').hidden = !(state.current === 8 && record.completed === true);
+  $('lab9-completion-explanation').hidden = !(state.current === 9 && record.completed === true);
 }
 
 function lab3DocumentStatus(id, record = state.labs['3'], draft = state.editors.get(3)) {
@@ -602,6 +634,45 @@ function drawLab2Progress() {
   panel.className = `extraction-progress${completed ? ' complete' : ''}`;
   panel.replaceChildren(heading, segments, status,
     node('p', 'extraction-progress-note', 'Only verified disclosures in one reply count.'));
+}
+
+function drawLab9Progress() {
+  if (state.current !== 9) {
+    document.querySelector('#lab9-guardrail-progress')?.remove();
+    return;
+  }
+  let panel = $('lab9-guardrail-progress');
+  const objective = $('scenario-objective');
+  if (!objective) return;
+  if (!panel) {
+    panel = node('aside', 'extraction-progress');
+    panel.id = 'lab9-guardrail-progress';
+    objective.parentElement.append(panel);
+  }
+  const progress = lab9Progress(currentLab());
+  const title = node('p', 'extraction-progress-title', 'Current conversation progress');
+  title.id = 'lab9-progress-title';
+  panel.setAttribute('aria-labelledby', title.id);
+  panel.setAttribute('data-state', progress.status);
+  const segments = node('div', 'extraction-progress-segments');
+  segments.setAttribute('role', 'progressbar');
+  segments.setAttribute('aria-labelledby', title.id);
+  segments.setAttribute('aria-valuemin', '0');
+  segments.setAttribute('aria-valuemax', '3');
+  segments.setAttribute('aria-valuenow', String(progress.step));
+  segments.setAttribute('aria-valuetext', progress.label);
+  for (let i = 0; i < 3; i += 1) {
+    const segment = node('span', `extraction-progress-segment${i < progress.step ? ' filled' : ''}`);
+    segment.setAttribute('aria-hidden', 'true');
+    segments.append(segment);
+  }
+  const status = node('p', 'extraction-progress-status', progress.label);
+  status.id = 'lab9-progress-status';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-atomic', 'true');
+  panel.className = `extraction-progress${progress.status === 'disclosed' ? ' complete' : ''}`;
+  panel.replaceChildren(title, segments, status, node('p', 'extraction-progress-note',
+    'Only verified events in the current attempt count. Starting a new chat resets progress.'));
 }
 
 function drawWorkspace() {
@@ -804,7 +875,7 @@ function drawLab() {
   $('chat-context').textContent = state.current === 1 ? 'Boiler monitoring assistant' : ['Vulnerable assistant', 'Hardened assistant', 'Guardrailed assistant'][record.defense_level || 0];
   $('lab-status').textContent = record.completed ? '✓ Completed' : record.exploited ? 'Flag captured' : record.messages.length ? 'In progress' : 'Ready to try';
   $('lab-status').className = `lab-status${record.completed ? ' complete' : record.exploited ? ' captured' : ''}`;
-  $('restart-lab').title = state.current === 3 || state.current === 4 || state.current === 5 || state.current === 8
+  $('restart-lab').title = state.current === 3 || state.current === 4 || state.current === 5 || state.current === 8 || state.current === 9
     ? 'Clear this lab’s chat and documents. Earned completion and points stay saved.'
     : 'Clear this lab’s chat, documents, flag, and points';
   $('prompt').value = state.promptDrafts.get(state.current) || '';
@@ -818,6 +889,7 @@ function navigate(id, push = true) {
   if (!Number.isInteger(id) || id < 1 || id > 9) return;
   state.promptDrafts.set(state.current, $('prompt').value);
   state.flagDrafts.set(state.current, $('flag-input').value);
+  if (state.current === 9 && id !== 9) $('lab9-guardrail-progress')?.remove();
   state.current = id;
   for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
   if (push && location.pathname !== `/lab/${id}`) history.pushState(null, '', `/lab/${id}`);
@@ -834,12 +906,16 @@ function acceptResponse(id, response) {
   if (id === 5 && staleLab3Response(state.labs['5'], response.lab)) return false;
   if (id === 6 && staleLab6Response(state.labs['6'], response.lab)) return false;
   if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return false;
+  if (id === 9 && staleLab9Response(state.labs['9'], response.lab)) return false;
   const justCaptured = !state.labs[String(id)].exploited && response.lab.exploited;
   state.labs[String(id)] = id === 1 ? newestBoilerState(response.lab) : response.lab;
   state.summary = response.summary;
   if (state.current === id) {
     drawLab();
-    if (justCaptured && !document.querySelector('dialog[open]')) $('flag-dialog').showModal();
+    if (justCaptured && !document.querySelector('dialog[open]')) {
+      if (globalThis.FlagPresentation) globalThis.FlagPresentation.reveal(response.lab.flag);
+      else $('flag-dialog').showModal();
+    }
   }
   else { drawNavigation(); updateControls(); }
 }
@@ -922,12 +998,14 @@ async function submitFlag(event) {
   const requestLab5 = id === 5 ? state.labs['5'] : null;
   const requestLab6 = id === 6 ? state.labs['6'] : null;
   const requestLab8 = id === 8 ? state.labs['8'] : null;
+  const requestLab9 = id === 9 ? state.labs['9'] : null;
   state.flagDrafts.set(id, flag);
   state.flagBusy.add(id); updateControls();
   try {
     const response = await api(`/api/labs/${id}/flag`, { flag });
     if (id === 2 && staleLab2Response(state.labs['2'], response.lab)) return;
     if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return;
+    if (id === 9 && staleLab9Response(state.labs['9'], response.lab)) return;
     if (id === 2) {
       if (response.lab.completed !== true) throw new Error('The server did not confirm Lab 2 completion. Please refresh and try again.');
       const newlyAwarded = response.flag_submission?.newly_completed === true
@@ -978,6 +1056,13 @@ async function submitFlag(event) {
       state.flagFeedback.set(id, { message: alreadyAwarded ? 'Lab already completed'
         : newlyAwarded ? `+${metadata(id).points} points. Well played.`
           : 'Lab complete. Award details unavailable.' });
+    } else if (id === 9) {
+      if (response.lab.completed !== true) throw new Error('The server did not confirm Lab 9 completion. Please refresh and try again.');
+      const newlyAwarded = response.flag_submission?.newly_completed === true
+        && response.flag_submission.points_awarded === metadata(id).points
+        && state.labs['9'].completed !== true;
+      state.flagFeedback.set(id, { message: newlyAwarded
+        ? `+${metadata(id).points} points. Well played.` : 'Lab already completed' });
     } else {
       state.flagFeedback.set(id, { message: id === 1 && state.labs['1'].completed
         ? 'Flag accepted. Lab 1 is complete; points were already awarded.'
@@ -995,6 +1080,7 @@ async function submitFlag(event) {
     if (id === 6 && (state.labs['6'].attempt !== requestLab6.attempt
         || (state.labs['6'].completed === true && requestLab6.completed !== true))) return;
     if (id === 8 && staleLab8Response(state.labs['8'], requestLab8)) return;
+    if (id === 9 && staleLab9Response(state.labs['9'], requestLab9)) return;
     state.flagFeedback.set(id, { message: error.message, error: true });
     if (state.current === id) drawFlag();
   } finally { state.flagBusy.delete(id); updateControls(); }
@@ -1005,6 +1091,7 @@ async function restartLab() {
   if (state.pending.has(id) || state.resetBusy.has(id) || (id === 1 && alertSaving)) return;
   const requestVersion = id === 2 ? state.labs['2']?._extractionVersion : null;
   const requestLab8 = id === 8 ? state.labs['8'] : null;
+  const requestLab9 = id === 9 ? state.labs['9'] : null;
   if (id === 1) boilerVersion += 1;
   state.resetBusy.add(id); updateControls();
   if (id === 2) drawLab2Progress();
@@ -1012,10 +1099,12 @@ async function restartLab() {
     const response = await api(`/api/labs/${id}/reset`, {});
     if (id === 2 && staleLab2Response(state.labs['2'], response.lab)) return;
     if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return;
+    if (id === 9 && staleLab9Response(state.labs['9'], response.lab)) return;
     for (const map of [state.promptDrafts, state.flagDrafts, state.editors, state.hintCounts, state.kbNotices, state.flagFeedback]) map.delete(id);
     acceptResponse(id, response);
   } catch (error) {
     if (id === 8 && staleLab8Response(state.labs['8'], requestLab8)) return;
+    if (id === 9 && staleLab9Response(state.labs['9'], requestLab9)) return;
     if (!staleLab2Request(id, requestVersion)) showError(`Lab ${id}: ${error.message}`);
   }
   finally {
@@ -1035,7 +1124,7 @@ async function changeDefense() {
     ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current extraction progress. Your captured flag and earned points stay saved. Continue?'
     : id === 3 || id === 8
     ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current verification. Earned completion and points stay saved. Your knowledge base stays saved. Continue?'
-    : id === 4 || id === 5 || id === 6
+    : id === 4 || id === 5 || id === 6 || id === 9
     ? 'Changing difficulty starts a new attempt and clears this lab’s chat and current verification. Earned completion and points stay saved. Continue?'
     : 'Changing difficulty starts a new attempt and clears this lab’s chat, captured flag, and points. Your knowledge base stays saved. Continue?';
   if ((record.messages.length || record.completed || record.exploited) && !window.confirm(confirmation)) {
@@ -1049,11 +1138,13 @@ async function changeDefense() {
     const response = await api(`/api/labs/${id}/defense`, { level });
     if (id === 2 && staleLab2Response(state.labs['2'], response.lab)) return;
     if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return;
+    if (id === 9 && staleLab9Response(state.labs['9'], response.lab)) return;
     for (const map of [state.promptDrafts, state.flagDrafts, state.flagFeedback]) map.delete(id);
     acceptResponse(id, response);
   } catch (error) {
     if (staleLab2Request(id, requestVersion)) return;
     if (id === 8 && staleLab8Response(state.labs['8'], record)) return;
+    if (id === 9 && staleLab9Response(state.labs['9'], record)) return;
     if (state.current === id) $('defense-select').value = String(currentLab().defense_level || 0);
     showError(error.message);
   } finally {
@@ -1081,6 +1172,10 @@ function acceptInitialState(data) {
     data.labs['8'] = state.labs['8'];
     data.summary = state.summary;
   }
+  if (staleLab9Response(state.labs['9'], data.labs['9'])) {
+    data.labs['9'] = state.labs['9'];
+    data.summary = state.summary;
+  }
   state.catalog = data.catalog;
   state.labs = data.labs;
   state.summary = data.summary;
@@ -1103,7 +1198,7 @@ async function start() {
     $('prompt').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('chat-form').requestSubmit(); } });
     $('flag-form').addEventListener('submit', submitFlag);
     $('flag-input').addEventListener('input', () => state.flagDrafts.set(state.current, $('flag-input').value));
-    $('use-captured-flag').addEventListener('click', () => { $('flag-input').value = currentLab().flag || ''; state.flagDrafts.set(state.current, $('flag-input').value); $('flag-input').focus(); });
+    $('use-captured-flag').addEventListener('click', () => globalThis.FlagPresentation?.copyAndClose($('flag-dialog')));
     $('hint-button').addEventListener('click', () => { state.hintCounts.set(state.current, ((state.hintCounts.get(state.current) || 0) + 1) % (metadata().hints.length + 1)); drawHints(); });
     $('restart-lab').addEventListener('click', restartLab);
     $('defense-select').addEventListener('change', changeDefense);

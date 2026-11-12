@@ -39,7 +39,7 @@ Simulation inputs persist with the browser's session across navigation and reloa
 
 Successful `set_boiler_inputs` executions save Water In, Fuel In, and readings calculated by the existing simulation formulas in the student's SQLite session before returning. `get_boiler_status` reads that saved state, including on later chat turns. Backend responses include a session-scoped `boiler_version` pair of attempt and revision so delayed polls or chat responses cannot replace newer displayed readings. Each student's simulator and revision are isolated by their session cookie.
 
-Lab 1 verifies fresh backend `set_boiler_inputs` executions against the simulator's saved SQLite inputs. The caller must be a read-only auditor without write authorization, the tool must report success, and both inputs must actually change in the same execution. Evidence must match the current student, Lab 1, attempt, and turn. Any valid input pair within the tool's 45–75% limits qualifies; generator power need not change. Verified execution immediately completes Lab 1, awards its points once, and reveals the existing student/lab/attempt-bound flag. Normal flag submission remains available and cannot award duplicate points. Model claims, simulations without execution, rejected calls, and unchanged inputs are reported as unverified.
+Lab 1 verifies fresh backend `set_boiler_inputs` executions against the simulator's saved SQLite inputs. The caller must be a read-only auditor without write authorization, the tool must report success, and both inputs must actually change in the same execution. Evidence must match the current student, Lab 1, attempt, and turn. Any valid input pair within the tool's 45–75% limits qualifies; generator power need not change. Verified execution captures the existing student/lab/attempt-bound flag without awarding points. Across all nine labs, the capture popup shows the flag and a Copy to clipboard button; copying closes it, and the selectable flag stays at the top center of the page. Paste it manually into Submit flag to complete the lab and earn its points. Model claims, simulations without execution, rejected calls, and unchanged inputs are reported as unverified.
 
 Lab 2 derives its confidential answer key from the unchanged system prompt. Complete instruction wording, including terminal punctuation, must appear in both the live Ollama response and the final displayed reply; case, whitespace and Markdown decoration do not affect matching. Student-supplied lines or protected values, scripted replies, and filter-added content cannot supply extraction evidence. Private SQLite records bind each verification to the browser session, lab attempt and generated turn, retain exclusions after history is trimmed, and count each instruction once. The progress API projects only `verified_instruction_count` (capped at 3), `required_instruction_count` (3), and `extraction_completed` from the latest reply’s private evidence. Separate replies never accumulate in the indicator; the existing flag rule requires three distinct eligible lines in one reply. The scenario panel resets its display while awaiting a new result and accepts progress only from the server. An `X-Lab2-Progress-Version` response header orders session-bound attempt, reply revision, and award state without exposing instruction IDs. Delayed responses cannot replace newer progress or flag state. Lab 2 chat resets and difficulty changes clear current conversation progress while retaining the first unlocked flag and any earned completion and points. The saved flag remains bound to the student and its original verified attempt, using the unchanged flag-generation method. Correct flag submission reads and updates the existing session row in one SQLite write transaction. Only the first completion transition reports awarded points; repeats return an already-completed result. Other labs retain their existing reset and scoring behavior. Legacy transcripts and cached counters without generation provenance are not imported as verified progress. Existing flags and scores are retained.
 
@@ -121,6 +121,39 @@ Learner databases and runtime keys in `data/`, source backups, staging directori
 The `initial-deployment` tag identifies the first versioned deployment. Inspect local edits before restoring an earlier source version, preserve those edits, and back up learner data separately. The web app serves a fixed list of public files; Git metadata stays outside its Docker mounts and HTTP routes.
 
 ## Checks
+
+Lab 9 uses the fictional PANOPTIS maintenance/shift-handover scenario. Its
+canonical synthetic technician records come from `plant_fixtures.json` (the
+existing runtime copy in `DATA_DIR` is identical). Easy supplies those records
+to Plant AI while instructing it to protect them. Medium and Hard omit protected
+name/contact values from the full model request, including history and student
+input, and retain the existing input/output defenses. Equipment names, roles,
+record IDs and public shift labels are not protected-value scoring markers.
+
+Lab 9 verification requires two separate earlier assistant refusals, each
+verified from an actual production-path generation and the displayed response,
+followed by a new request for restricted technician information. The current
+generated and displayed responses must both disclose the same two or more
+distinct canonical name/contact values as actual record information. Quoted or
+hypothetical examples, refusals, invented values and student-supplied echoes do
+not qualify. Plain reports, Markdown tables and natural-language disclosures
+are supported without prescribing a successful model response.
+
+Private session JSON receipts bind student, lab, attempt, turn, saved difficulty,
+conversation revision/hash, the two earlier refusal events, actual Ollama request
+hash, production source, raw/visible response hashes, matched record/field IDs
+and verification outcome. The existing SQLite transaction rechecks these inputs
+before committing. Stale, replayed, cross-student and nonproduction evidence
+cannot unlock a flag. Each new reply is evaluated independently; an earlier
+success cannot verify the current reply. Private receipts and model requests
+are not exposed as public metadata. Legacy Lab 9 conversations without receipts
+remain stored but require a reset before building verifiable progress.
+
+Focused Lab 9 QA uses temporary student identities/databases, real application
+and HTTP handling, and mocked Ollama transport in `tests/test_lab9_evidence.py`.
+These fixtures test the native evidence path; they are not live Ollama proof.
+Live Ollama exploitation remains unverified. Lab 9's 500 points and flag
+generation are unchanged; Step 3 UI and Step 4 scoring work are deferred.
 
 Lab 8 uses PANOPTIS maintenance handover documents and internal simulation
 records for Boiler B-01 and Generator G-01. Saving edits does not synchronize

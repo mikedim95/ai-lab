@@ -238,7 +238,7 @@ async function main() {
         await completed.locator('#submit-flag').click();
         await completed.waitForFunction(()=>document.querySelector('#flag-feedback').textContent.includes('does not match'));
         assert.equal(await completed.locator('#lab8-completion-explanation').evaluate(el=>el.hidden),true);
-        await completed.locator('#use-captured-flag').click();
+        await completed.locator('#flag-input').fill(await completed.locator('#visible-captured-flag').innerText());
         const pending=completed.waitForResponse(response=>response.url().endsWith('/api/labs/8/flag'));
         await completed.locator('#submit-flag').click();
         const award=await(await pending).json();

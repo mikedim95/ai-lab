@@ -53,3 +53,15 @@ request evidence. Completion uses the existing transaction-safe award pattern
 and retains the original verified flag across new attempts. The 400-point value,
 flag format, model configuration, and defense decisions and thresholds remain
 unchanged. No upstream source files are modified by this adaptation.
+
+Lab 9's PANOPTIS maintenance and shift-handover context uses only synthetic
+technician records from plant_fixtures.json. Its guardrail-erosion challenge
+remains derived from AIGoat; the original StateExploitationEvaluator and prompt
+are preserved unchanged in upstream/. Runtime verification requires two
+chronological, production-backed refusal turns and a fresh protected-field
+disclosure, using the existing private session-receipt transaction machinery.
+The 500-point value, flag generation, inference settings and Labs 1–8 remain
+unchanged. Lab 9 adds student progress, sequential hints, a completion-only
+learning explanation, and durable completion using the shared SQLite
+transaction infrastructure. Across all nine labs, flags are copied from a
+capture popup and submitted manually before points are awarded.
