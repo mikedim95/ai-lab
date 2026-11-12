@@ -16,11 +16,13 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 from contextlib import contextmanager
+from contextvars import ContextVar
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from capstone.bridge import signature
 
@@ -78,6 +80,263 @@ class APIError(Exception):
     def __init__(self, status, message):
         self.status = status
         super().__init__(message)
+
+
+_ACTIVE_TRACE = ContextVar("student_chat_trace", default=None)
+TRACE_STAGES = frozenset({"input", "session", "policy", "context", "rag", "ollama",
+                          "tool_authorization", "tool_execution", "output_protection", "exploit_verification"})
+TRACE_STATUSES = frozenset({"waiting", "running", "passed", "blocked", "skipped", "error"})
+TRACE_EVENT_STAGES = TRACE_STAGES | {"trace"}
+TRACE_OUTCOMES = frozenset({"COMPLETED", "MODEL_REFUSED", "BACKEND_BLOCKED",
+                            "NO_EXPLOIT", "EXPLOIT_VERIFIED", "ERROR"})
+TRACE_MAX_EVENTS = 256
+TRACE_RESERVATION_SECONDS = 30
+TRACE_RUN_SECONDS = 900
+TRACE_STREAM_SECONDS = 60
+TRACE_POLL_SECONDS = .2
+TRACE_HEARTBEAT_SECONDS = 10
+TRACE_REASONS = frozenset({
+    "stage_started", "stage_completed", "lock_wait", "lock_acquired", "input_validated",
+    "invalid_input", "request_rejected", "generation_busy", "session_loaded", "session_saved",
+    "policy_allowed", "input_policy_rejected", "rag_completed", "rag_sources_rejected",
+    "not_enabled", "input_rejected", "context_built", "request_started", "model_response",
+    "model_tool_request", "non_production_model", "tool_allowed", "authorization_bypassed",
+    "tool_rejected", "tool_executed", "not_requested", "output_allowed", "output_rejected",
+    "verified", "condition_not_met", "model_refusal", "stale_attempt", "pipeline_error",
+    "ollama_error", "not_reached",
+    "tool_dispatch_allowed", "protection_rejected",
+    "trace_completed", "trace_blocked", "trace_error", "trace_unavailable",
+    "reservation_expired", "stream_unavailable", "stream_timeout",
+})
+
+
+def _trace_failure(exc):
+    if isinstance(exc, APIError) and 400 <= exc.status < 500:
+        return "blocked", "stale_attempt" if exc.status == 409 else "request_rejected"
+    return "error", "pipeline_error"
+
+
+def _trace_cookie(header):
+    jar = cookies.SimpleCookie()
+    try:
+        jar.load(header)
+    except cookies.CookieError:
+        return None
+    sid = jar["nine_sid"].value if "nine_sid" in jar else ""
+    return sid if re.fullmatch(r"[A-Za-z0-9_-]{43}", sid) else None
+
+
+def _trace_metadata(record):
+    """Project only the saved attempt identity, never current UI selections.
+
+    These values come from the owning trace row. An invalid telemetry row must
+    fail its optional projection rather than serialize arbitrary stored data.
+    """
+    metadata = {key: record[key] for key in ("lab_id", "difficulty", "attempt")}
+    if (type(metadata["lab_id"]) is not int or not 1 <= metadata["lab_id"] <= 9
+            or type(metadata["difficulty"]) is not int or metadata["difficulty"] not in (0, 1, 2)
+            or type(metadata["attempt"]) is not int or not 1 <= metadata["attempt"] <= 9007199254740991):
+        raise RuntimeError("Invalid trace metadata")
+    return metadata
+
+
+class TraceStreams:
+    """Bounded connection accounting and failure-only completion notices.
+
+    Event delivery/replay reads SQLite; no subscriber queues or socket writes
+    ever run on the chat thread. The cache contains no prompt or response text.
+    """
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.active = {}
+        self.completed = OrderedDict()
+
+    def acquire(self, student_id):
+        with self.lock:
+            if sum(self.active.values()) >= 16 or self.active.get(student_id, 0) >= 2:
+                return False
+            self.active[student_id] = self.active.get(student_id, 0) + 1
+            return True
+
+    def release(self, student_id):
+        with self.lock:
+            count = self.active.get(student_id, 0) - 1
+            if count > 0:
+                self.active[student_id] = count
+            else:
+                self.active.pop(student_id, None)
+
+    def finish(self, trace_id, status, reason):
+        with self.lock:
+            self.completed[trace_id] = (status, reason, time.monotonic())
+            self.completed.move_to_end(trace_id)
+            while len(self.completed) > 128:
+                self.completed.popitem(last=False)
+
+    def terminal(self, trace_id):
+        with self.lock:
+            result = self.completed.get(trace_id)
+            if result is not None and time.monotonic() - result[2] > TRACE_RUN_SECONDS:
+                self.completed.pop(trace_id, None)
+                return None
+            return result
+
+
+class ChatTrace:
+    """Private, content-free execution events; never evidence for an evaluator.
+
+    The existing server-issued session is the student identity in this app.
+    Store only its opaque digest, never the bearer cookie. No prompt, reply,
+    tool arguments, document metadata, exception text, or evidence is serialized.
+    """
+    def __init__(self, store, lab_id):
+        self.store = store
+        self.trace_id = secrets.token_hex(16)
+        self.turn_id = secrets.token_hex(16)
+        self.lab_id = lab_id
+        self.student_id = self.difficulty = self.attempt = None
+        self.created_at = time.time()
+        self.started = time.monotonic()
+        self.sequence = self.span_sequence = 0
+        self.active = {}
+        self.seen = set()
+        self.closed = self.disabled = self.in_chat = False
+        self.saw_blocked = self.saw_error = False
+        self.request_returned = self.enforced_block = False
+        self.exploit_checked = self.current_verified = self.explicit_refusal = False
+        self.final_outcome = None
+
+    def bind(self, sid, record=None, *, turn_id=None):
+        if self.disabled:
+            return
+        if record is None:
+            # Read only: tracing must never create or migrate a student session.
+            with self.store.connect(timeout=.025) as db:
+                row = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
+            if row is None:
+                return
+            record = json.loads(row[0])["labs"][str(self.lab_id)]
+        self.student_id = hashlib.sha256(sid.encode()).hexdigest()
+        self.difficulty = record.get("defense_level", 0)
+        self.attempt = record["attempt"]
+        if turn_id is not None:
+            # Production turn IDs are random hex. Keep injected IDs opaque too.
+            self.turn_id = turn_id if re.fullmatch(r"[a-f0-9]{32}", turn_id) else hashlib.sha256(turn_id.encode()).hexdigest()
+
+    def bind_cookie(self, header):
+        sid = _trace_cookie(header)
+        if sid is not None:
+            self.bind(sid)
+        return sid
+
+    def emit(self, span_id, stage, status, reason, started):
+        if self.disabled or self.closed:
+            return
+        if stage not in TRACE_STAGES or status not in TRACE_STATUSES:
+            return
+        reason = reason if reason in TRACE_REASONS else "stage_completed"
+        self.saw_blocked |= status == "blocked"
+        self.saw_error |= status == "error"
+        # A rejected source does not necessarily reject the whole request;
+        # the remaining context and model may still be processed normally.
+        self.enforced_block |= status == "blocked" and stage != "rag"
+        self.sequence += 1
+        if self.sequence > TRACE_MAX_EVENTS:
+            raise RuntimeError("Trace event limit reached")
+        self.seen.add(stage)
+        self.store.append_trace_event(self, (self.sequence, span_id, stage, status, time.time(),
+            round(max(0, time.monotonic() - started) * 1000, 3), reason))
+
+    def begin(self, stage, status="running", reason="stage_started"):
+        self.span_sequence += 1
+        span_id = self.span_sequence
+        self.active[span_id] = (stage, time.monotonic())
+        self.emit(span_id, stage, status, reason, self.active[span_id][1])
+        return span_id
+
+    def running(self, span_id):
+        stage, started = self.active[span_id]
+        self.emit(span_id, stage, "running", "lock_acquired", started)
+
+    def end(self, span_id, status="passed", reason="stage_completed"):
+        span = self.active.pop(span_id, None)
+        if span:
+            self.emit(span_id, span[0], status, reason, span[1])
+
+    def skip(self, stage, reason):
+        span = self.begin(stage, status="skipped", reason=reason)
+        self.active.pop(span, None)
+
+    def verification_result(self, span_id, lab_id, record):
+        verified = record["last_result"]["triggered"]
+        receipts = record.get("lab9_verification_receipts", []) if lab_id == 9 else []
+        refusal = bool(receipts and receipts[-1].get("refusal_verified") is True)
+        self.exploit_checked = span_id is not None
+        self.current_verified = self.exploit_checked and verified is True
+        self.explicit_refusal = refusal
+        self.end(span_id, "passed", "verified" if verified else "model_refusal" if refusal else "condition_not_met")
+
+    def request_completed(self):
+        # Called only after the original chat implementation returns its
+        # result. A caught model follow-up error may still have a valid native
+        # tool result; stage errors alone cannot decide the request's outcome.
+        self.request_returned = True
+
+    def close(self, exc=None):
+        if self.closed:
+            return
+        status, reason = _trace_failure(exc) if exc is not None else ("error", "pipeline_error")
+        if not self.disabled:
+            for span in list(self.active):
+                _trace_call("end", span, status, reason)
+            for stage in sorted(TRACE_STAGES - self.seen):
+                _trace_call("skip", stage, "not_requested" if stage.startswith("tool_") and exc is None else "not_reached")
+        terminal_status = ("error" if self.disabled or self.saw_error or (exc is not None and status == "error")
+                           else "blocked" if self.saw_blocked or exc is not None else "passed")
+        terminal_reason = ("trace_unavailable" if self.disabled else "trace_error" if terminal_status == "error"
+                           else "trace_blocked" if terminal_status == "blocked" else "trace_completed")
+        if not self.disabled:
+            if exc is not None:
+                rejected = self.enforced_block or (isinstance(exc, APIError) and 400 <= exc.status < 500)
+                self.final_outcome = "BACKEND_BLOCKED" if rejected else "ERROR"
+            elif self.request_returned:
+                self.final_outcome = ("EXPLOIT_VERIFIED" if self.current_verified else
+                    "BACKEND_BLOCKED" if self.enforced_block else "MODEL_REFUSED" if self.explicit_refusal else
+                    "NO_EXPLOIT" if self.exploit_checked else "COMPLETED")
+        try:
+            self.store.finish_trace(self, terminal_status, terminal_reason)
+        except Exception:
+            terminal_status, terminal_reason = "error", "trace_unavailable"
+            logging.warning("Chat tracing unavailable")
+        finally:
+            self.store.trace_streams.finish(self.trace_id, terminal_status, terminal_reason)
+        self.closed = True
+
+
+def _trace_call(method, *args, **kwargs):
+    """All instrumentation, including persistence, fails independently of chat."""
+    trace = _ACTIVE_TRACE.get()
+    if trace is None or (trace.disabled and method != "close"):
+        return None
+    try:
+        return getattr(trace, method)(*args, **kwargs)
+    except Exception:
+        trace.disabled = True
+        logging.warning("Chat tracing unavailable")
+        return None
+
+
+@contextmanager
+def _trace_stage(stage, reason="stage_started"):
+    span = _trace_call("begin", stage, reason=reason)
+    try:
+        yield span
+    except Exception as exc:
+        status, failure = _trace_failure(exc)
+        _trace_call("end", span, status, "ollama_error" if stage == "ollama" else failure)
+        raise
+    else:
+        _trace_call("end", span)
 
 
 class _Lab2Projection(dict):
@@ -764,6 +1023,7 @@ class Store:
     def __init__(self, directory):
         directory.mkdir(parents=True, exist_ok=True)
         self.path = directory / "nine-labs.sqlite3"
+        self.trace_streams = TraceStreams()
         with self.connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS sessions (sid TEXT PRIMARY KEY, data TEXT NOT NULL, updated REAL NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -772,10 +1032,143 @@ class Store:
                 evidence TEXT NOT NULL, PRIMARY KEY (sid, attempt, turn_id))""")
             db.execute("INSERT OR IGNORE INTO metadata VALUES ('flag_key', ?)", (secrets.token_hex(32),))
             self.flag_key = bytes.fromhex(db.execute("SELECT value FROM metadata WHERE name='flag_key'").fetchone()[0])
+        try:
+            self.initialize_trace_schema()
+        except Exception:
+            logging.warning("Chat tracing unavailable")
+
+    def initialize_trace_schema(self):
+        with self.connect(timeout=.025) as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS chat_traces (
+                trace_id TEXT PRIMARY KEY, student_id TEXT, lab_id INTEGER NOT NULL,
+                difficulty INTEGER, attempt INTEGER, turn_id TEXT NOT NULL,
+                created_at REAL NOT NULL, finished_at REAL)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS chat_trace_events (
+                trace_id TEXT NOT NULL, sequence INTEGER NOT NULL, span_id INTEGER NOT NULL,
+                stage TEXT NOT NULL, status TEXT NOT NULL, timestamp REAL NOT NULL,
+                duration_ms REAL NOT NULL, reason_code TEXT NOT NULL,
+                PRIMARY KEY (trace_id, sequence))""")
+            db.execute("CREATE INDEX IF NOT EXISTS chat_traces_student ON chat_traces(student_id, lab_id, created_at)")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(chat_traces)")}
+            if "state" not in columns:
+                db.execute("ALTER TABLE chat_traces ADD COLUMN state TEXT NOT NULL DEFAULT 'running'")
+                db.execute("UPDATE chat_traces SET state='finished' WHERE finished_at IS NOT NULL")
+            if "started_at" not in columns:
+                db.execute("ALTER TABLE chat_traces ADD COLUMN started_at REAL")
+            if "final_outcome" not in columns:
+                db.execute("ALTER TABLE chat_traces ADD COLUMN final_outcome TEXT")
+
+    def append_trace_event(self, trace, event):
+        # Separate rows/transactions keep telemetry out of session merges and
+        # private verification receipts. A busy trace writer waits at most 25 ms.
+        with self.connect(timeout=.025) as db:
+            db.execute("""INSERT INTO chat_traces
+                (trace_id, student_id, lab_id, difficulty, attempt, turn_id, created_at, started_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trace_id) DO UPDATE SET student_id=excluded.student_id,
+                difficulty=excluded.difficulty, attempt=excluded.attempt, turn_id=excluded.turn_id""",
+                (trace.trace_id, trace.student_id, trace.lab_id, trace.difficulty,
+                 trace.attempt, trace.turn_id, trace.created_at, time.time()))
+            db.execute("INSERT INTO chat_trace_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (trace.trace_id, *event))
+
+    def finish_trace(self, trace, status, reason):
+        with self.connect(timeout=.025) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT finished_at FROM chat_traces WHERE trace_id=?", (trace.trace_id,)).fetchone()
+            if row is None or row[0] is not None:
+                return
+            sequence = db.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM chat_trace_events WHERE trace_id=?",
+                                  (trace.trace_id,)).fetchone()[0]
+            now = time.time()
+            db.execute("INSERT INTO chat_trace_events VALUES (?, ?, 0, 'trace', ?, ?, ?, ?)",
+                (trace.trace_id, sequence, status, now, round(max(0, time.monotonic()-trace.started)*1000, 3), reason))
+            db.execute("UPDATE chat_traces SET finished_at=?,state='finished',final_outcome=? WHERE trace_id=?",
+                       (now, trace.final_outcome, trace.trace_id))
+
+    def reserve_trace(self, sid, lab_id):
+        student_id = hashlib.sha256(sid.encode()).hexdigest()
+        now = time.time()
+        with self.connect(timeout=.025) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
+            if row is None:
+                raise APIError(401, "Open the lab before requesting a trace.")
+            record = json.loads(row[0])["labs"][str(lab_id)]
+            count = db.execute("""SELECT COUNT(*) FROM chat_traces WHERE student_id=? AND finished_at IS NULL
+                AND ((state='reserved' AND created_at>?) OR (state='running' AND COALESCE(started_at,created_at)>?))""",
+                (student_id, now-TRACE_RESERVATION_SECONDS, now-TRACE_RUN_SECONDS)).fetchone()[0]
+            if count >= 4:
+                raise APIError(429, "Trace capacity is busy. Chat is still available.")
+            # Bound abandoned reservations and retain recent finished replay
+            # history. This maintenance runs only on the optional trace endpoint.
+            db.execute("DELETE FROM chat_traces WHERE student_id=? AND state='reserved' AND created_at<?",
+                       (student_id, now-TRACE_RESERVATION_SECONDS))
+            old = [row[0] for row in db.execute("""SELECT trace_id FROM chat_traces
+                WHERE student_id=? AND finished_at IS NOT NULL ORDER BY created_at DESC LIMIT 16 OFFSET 200""", (student_id,))]
+            for trace_id in old:
+                db.execute("DELETE FROM chat_trace_events WHERE trace_id=?", (trace_id,))
+                db.execute("DELETE FROM chat_traces WHERE trace_id=?", (trace_id,))
+            trace_id, turn_id = secrets.token_hex(16), secrets.token_hex(16)
+            db.execute("""INSERT INTO chat_traces
+                (trace_id,student_id,lab_id,difficulty,attempt,turn_id,created_at,state)
+                VALUES (?,?,?,?,?,?,?,'reserved')""", (trace_id, student_id, lab_id,
+                record.get("defense_level", 0), record["attempt"], turn_id, now))
+            saved = db.execute("SELECT lab_id,difficulty,attempt FROM chat_traces WHERE trace_id=?", (trace_id,)).fetchone()
+            metadata = _trace_metadata(dict(zip(("lab_id", "difficulty", "attempt"), saved)))
+        return {"trace_id": trace_id, "events_url": f"/api/traces/{trace_id}/events", "metadata": metadata}
+
+    def claim_trace(self, sid, lab_id, trace_id):
+        if not isinstance(trace_id, str) or not re.fullmatch(r"[a-f0-9]{32}", trace_id):
+            return None
+        with self.connect(timeout=.025) as db:
+            db.row_factory = sqlite3.Row
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("""SELECT * FROM chat_traces WHERE trace_id=? AND student_id=?
+                AND lab_id=? AND state='reserved' AND created_at>?""",
+                (trace_id, hashlib.sha256(sid.encode()).hexdigest(), lab_id, time.time()-TRACE_RESERVATION_SECONDS)).fetchone()
+            session = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
+            if row is None or session is None:
+                return None
+            record = json.loads(session[0])["labs"][str(lab_id)]
+            if (row["attempt"], row["difficulty"]) != (record["attempt"], record.get("defense_level", 0)):
+                return None
+            db.execute("UPDATE chat_traces SET state='running',started_at=? WHERE trace_id=?", (time.time(), trace_id))
+            return dict(row)
+
+    def read_trace(self, sid, trace_id, after=0):
+        with self.connect(timeout=.025) as db:
+            db.row_factory = sqlite3.Row
+            db.execute("BEGIN")
+            row = db.execute("""SELECT *, (SELECT COALESCE(MAX(sequence),0) FROM chat_trace_events
+                WHERE trace_id=chat_traces.trace_id) AS latest_event_id FROM chat_traces WHERE trace_id=? AND student_id=?
+                AND EXISTS(SELECT 1 FROM sessions WHERE sid=?)""",
+                (trace_id, hashlib.sha256(sid.encode()).hexdigest(), sid)).fetchone()
+            if row is None:
+                raise APIError(404, "Trace not found.")
+            metadata = _trace_metadata(row)
+            if row["final_outcome"] is not None and row["final_outcome"] not in TRACE_OUTCOMES:
+                raise RuntimeError("Invalid trace outcome")
+            if after > row["latest_event_id"]:
+                raise APIError(400, "Invalid event cursor.")
+            events = [dict(event) for event in db.execute("""SELECT sequence AS event_id,span_id,stage,status,
+                timestamp,duration_ms,reason_code FROM chat_trace_events
+                WHERE trace_id=? AND sequence>? ORDER BY sequence LIMIT 64""", (trace_id, after))]
+            for event in events:
+                # Explicit projection: neither table metadata nor evidence can
+                # enter the stream, even if a malformed telemetry row exists.
+                if (event["stage"] not in TRACE_EVENT_STAGES or event["status"] not in TRACE_STATUSES
+                        or event["reason_code"] not in TRACE_REASONS
+                        or not all(type(event[key]) in (int, float) and math.isfinite(event[key])
+                                   for key in ("event_id", "span_id", "timestamp", "duration_ms"))):
+                    raise RuntimeError("Invalid trace projection")
+                event["metadata"] = dict(metadata)
+                if event["stage"] == "trace":
+                    event["outcome"] = row["final_outcome"]
+            return dict(row), events
 
     @contextmanager
-    def connect(self):
-        db = sqlite3.connect(self.path, timeout=15)
+    def connect(self, *, timeout=15):
+        db = sqlite3.connect(self.path, timeout=timeout)
         try:
             with db:
                 yield db
@@ -1266,28 +1659,35 @@ def local_model(messages, tools=None, get_boiler_status=None, set_boiler_inputs=
                 payload["tools"] = tools
             else:
                 payload.pop("tools", None)
-            request = urllib.request.Request(OLLAMA_URL + "/api/chat", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
-            if generation_evidence is not None:
-                generation_evidence["ollama_request_sha256"] = _lab3_hash(json.loads(request.data))
-            with urllib.request.urlopen(request, timeout=240) as response:
-                data = json.load(response)
-            message = data.get("message", {})
-            calls = (message.get("tool_calls") or []) if tools else []
-            if not isinstance(calls, list):
-                raise APIError(503, "The local AI returned an invalid tool call. Please try again.")
-            if not calls:
+            with _trace_stage("ollama", "request_started") as ollama_span:
+                request = urllib.request.Request(OLLAMA_URL + "/api/chat", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
                 if generation_evidence is not None:
-                    generation_evidence["original_response"] = message.get("content", "")
-                reply = message.get("content", "").strip()
-                if not reply:
-                    raise APIError(503, "The local AI returned an empty reply. Please try again.")
-                return reply[:14000]
-            if tool_calls_used + len(calls) > MAX_BOILER_TOOL_CALLS:
-                raise APIError(503, "The local AI exceeded the two-tool-call limit. Please try again.")
+                    generation_evidence["ollama_request_sha256"] = _lab3_hash(json.loads(request.data))
+                with urllib.request.urlopen(request, timeout=240) as response:
+                    data = json.load(response)
+                message = data.get("message", {})
+                calls = (message.get("tool_calls") or []) if tools else []
+                if not isinstance(calls, list):
+                    raise APIError(503, "The local AI returned an invalid tool call. Please try again.")
+                if not calls:
+                    if generation_evidence is not None:
+                        generation_evidence["original_response"] = message.get("content", "")
+                    reply = message.get("content", "").strip()
+                    if not reply:
+                        raise APIError(503, "The local AI returned an empty reply. Please try again.")
+                    _trace_call("end", ollama_span, "passed", "model_response")
+                    return reply[:14000]
+                if tool_calls_used + len(calls) > MAX_BOILER_TOOL_CALLS:
+                    rejected_span = _trace_call("begin", "tool_authorization")
+                    _trace_call("end", rejected_span, "blocked", "tool_rejected")
+                    raise APIError(503, "The local AI exceeded the two-tool-call limit. Please try again.")
+                _trace_call("end", ollama_span, "passed", "model_tool_request")
             conversation.append({"role": "assistant", "content": message.get("content") or "", "tool_calls": calls})
             for call in calls:
+                dispatch_span = _trace_call("begin", "tool_authorization")
                 function = call.get("function") if isinstance(call, dict) else None
                 if not isinstance(function, dict) or function.get("name") not in {"get_boiler_status", "set_boiler_inputs"}:
+                    _trace_call("end", dispatch_span, "blocked", "tool_rejected")
                     raise APIError(503, "The local AI requested an unavailable tool. Please try again.")
                 name = function["name"]
                 arguments = function.get("arguments", {})
@@ -1296,18 +1696,24 @@ def local_model(messages, tools=None, get_boiler_status=None, set_boiler_inputs=
                         arguments = json.loads(arguments)
                     except ValueError:
                         if name != "set_boiler_inputs":
+                            _trace_call("end", dispatch_span, "blocked", "tool_rejected")
                             raise
                 tool_calls_used += 1
                 if name == "get_boiler_status":
                     if arguments is not None and arguments != {}:
+                        _trace_call("end", dispatch_span, "blocked", "tool_rejected")
                         raise APIError(503, "The boiler status tool takes no arguments. Please try again.")
                     if not callable(get_boiler_status):
+                        _trace_call("end", dispatch_span, "blocked", "tool_rejected")
                         raise APIError(503, "The local AI requested an unavailable tool. Please try again.")
+                    _trace_call("end", dispatch_span, "passed", "tool_dispatch_allowed")
                     result = get_boiler_status()
                 else:
                     if not callable(set_boiler_inputs):
+                        _trace_call("end", dispatch_span, "blocked", "tool_rejected")
                         raise APIError(503, "The local AI requested an unavailable tool. Please try again.")
                     # Preserve malformed arguments too, so rejected writes are audited.
+                    _trace_call("end", dispatch_span, "passed", "tool_dispatch_allowed")
                     result = set_boiler_inputs(arguments)
                 conversation.append({"role": "tool", "tool_name": name, "content": json.dumps(result)})
         raise APIError(503, "The local AI did not finish within the tool-call limit. Please try again.")
@@ -1344,6 +1750,21 @@ class Application:
     def session_lock(self, sid):
         with self.locks_guard:
             return self.locks.setdefault(sid, threading.Lock())
+
+    def create_chat_trace(self, lab_id, cookie_header, reserved_id=None):
+        trace = ChatTrace(self.store, lab_id)
+        try:
+            sid = trace.bind_cookie(cookie_header)
+            reserved = self.store.claim_trace(sid, lab_id, reserved_id) if sid and trace.student_id else None
+            if reserved is not None:
+                trace.trace_id = reserved["trace_id"]
+                trace.turn_id = reserved["turn_id"]
+                trace.created_at = reserved["created_at"]
+        except Exception:
+            # A failed/replayed/foreign reservation never changes admission,
+            # policy, or chat behavior. The normal private trace is independent.
+            pass
+        return trace
 
     def summary(self, data):
         completed = [item["id"] for item in CATALOG if data["labs"][str(item["id"])]["completed"]]
@@ -1527,7 +1948,9 @@ class Application:
         """Only the native model-tool dispatcher calls this session-bound path."""
         if tool_name not in {"get_boiler_status", "set_boiler_inputs"}:
             raise APIError(503, "The local AI requested an unavailable tool. Please try again.")
+        authorization_span = _trace_call("begin", "tool_authorization", "waiting", "lock_wait")
         with self.session_lock(sid):
+            _trace_call("running", authorization_span)
             _, data = self.store.get(sid)
             record = data["labs"]["1"]
             if record["attempt"] != attempt:
@@ -1542,6 +1965,11 @@ class Application:
             )
             level = record.get("defense_level", 0)
             executed = valid and (authorized or level == 0)
+            _trace_call("end", authorization_span, "passed" if executed else "blocked",
+                        "authorization_bypassed" if executed and not authorized else "tool_allowed" if executed else "tool_rejected")
+            execution_span = _trace_call("begin", "tool_execution") if executed else None
+            if not executed:
+                _trace_call("skip", "tool_execution", "tool_rejected")
             if executed:
                 self.advance_saved_boiler(record)
             old_readings = copy.deepcopy(record["boiler"])
@@ -1575,10 +2003,13 @@ class Application:
             self.store.save(sid, data)
             _, data = self.store.get(sid)
             record = data["labs"]["1"]
+            _trace_call("end", execution_span, "passed", "tool_executed")
+            native_verification_span = _trace_call("begin", "exploit_verification")
             event["exploit_verified"] = check_boiler_control(
                 [event], student_id=student_id, lab_id=1, attempt=record["attempt"],
                 turn_id=turn_id, boiler=record["boiler"],
             )
+            _trace_call("end", native_verification_span, "passed", "verified" if event["exploit_verified"] else "condition_not_met")
             if event["exploit_verified"]:
                 record["exploited"] = True
                 # Capture the flag now; submit_flag awards the points separately.
@@ -1589,6 +2020,35 @@ class Application:
             return result
 
     def chat(self, sid, lab_id, body, *, request_id=None):
+        trace = _ACTIVE_TRACE.get()
+        owned = trace is None or trace.store is not self.store or trace.in_chat
+        token = None
+        if owned:
+            try:
+                trace = ChatTrace(self.store, lab_id)
+            except Exception:
+                trace = None
+            token = _ACTIVE_TRACE.set(trace)
+        if trace is not None:
+            trace.in_chat = True
+        _trace_call("bind", sid)
+        error = None
+        try:
+            result = self._chat(sid, lab_id, body, request_id=request_id)
+            _trace_call("request_completed")
+            return result
+        except Exception as exc:
+            error = exc
+            raise
+        finally:
+            _trace_call("close", error)
+            if trace is not None:
+                trace.in_chat = False
+            if token is not None:
+                _ACTIVE_TRACE.reset(token)
+
+    def _chat(self, sid, lab_id, body, *, request_id=None):
+        input_span = _trace_call("begin", "input")
         if lab_id in (8, 9):
             request_id = request_id or secrets.token_hex(16)
         message = body.get("message")
@@ -1597,7 +2057,10 @@ class Application:
         if "use_kb" in body and not isinstance(body["use_kb"], bool):
             raise APIError(400, "Use knowledge base must be on or off.")
         message = message.strip()
+        _trace_call("end", input_span, "passed", "input_validated")
+        admission_span = _trace_call("begin", "session")
         if not self.generation.acquire(blocking=False):
+            _trace_call("end", admission_span, "blocked", "generation_busy")
             raise APIError(429, "The local AI is finishing another reply. You can explore the other labs and try again shortly.")
         lab3_binding = None
         lab3_generated = lab3_displayed = None
@@ -1622,9 +2085,14 @@ class Application:
         lab9_generation = {}
         lab9_saved = False
         try:
+            _trace_call("end", admission_span)
+            session_span = _trace_call("begin", "session", "waiting", "lock_wait")
             with self.session_lock(sid):
+                _trace_call("running", session_span)
                 _, data = self.store.get(sid)
                 snapshot = copy.deepcopy(data["labs"][str(lab_id)])
+            _trace_call("bind", sid, snapshot)
+            _trace_call("end", session_span, "passed", "session_loaded")
             started = time.monotonic()
             turn_id = secrets.token_hex(16) if lab_id in (1, 2) else None
             lab2_live = False
@@ -1663,9 +2131,15 @@ class Application:
                                 "contract_sha256": LAB9_CONTRACT_SHA256,
                                 "student_request_sha256": _lab3_hash(body["message"]),
                                 "message_sha256": _lab3_hash(message), "generation_source": "not_generated"}
+            binding = next((value for value in (lab3_binding, lab4_binding, lab5_binding,
+                           lab6_binding, lab8_binding, lab9_binding) if value is not None), None)
+            _trace_call("bind", sid, snapshot, turn_id=turn_id or (binding or {}).get("turn_id"))
             tool_events = []
             level = snapshot.get("defense_level", 0)
-            cleaned_message, blocked_reason = defend_input(message, level, lab_id=lab_id)
+            with _trace_stage("policy") as policy_span:
+                cleaned_message, blocked_reason = defend_input(message, level, lab_id=lab_id)
+                _trace_call("end", policy_span, "blocked" if blocked_reason else "passed",
+                            "input_policy_rejected" if blocked_reason else "policy_allowed")
             if lab4_binding is not None:
                 lab4_binding["effective_message_sha256"] = _lab3_hash(cleaned_message)
             if lab5_binding is not None:
@@ -1678,6 +2152,9 @@ class Application:
             use_kb = body.get("use_kb", snapshot["use_kb"]) and lab_id in KB_LABS
             if lab8_binding is not None:
                 lab8_binding.update(kb_enabled=use_kb, effective_message_sha256=_lab3_hash(cleaned_message))
+            rag_span = _trace_call("begin", "rag") if use_kb and not blocked_reason else None
+            if rag_span is None:
+                _trace_call("skip", "rag", "input_rejected" if blocked_reason else "not_enabled")
             entries = retrieve(cleaned_message, snapshot["synced_documents"]) if use_kb and not blocked_reason else []
             entries, excluded_entries = defend_retrieval(entries, level, lab_id=lab_id)
             # Bound context size without misreporting which content the evaluator saw.
@@ -1689,11 +2166,15 @@ class Application:
                 entry["content"] = entry["content"][:remaining]
                 remaining -= len(entry["content"])
                 used_entries.append(entry)
+            _trace_call("end", rag_span, "blocked" if excluded_entries else "passed",
+                        "rag_sources_rejected" if excluded_entries else "rag_completed")
             if lab3_binding is not None:
                 lab3_binding["retrieved_documents"] = _lab3_excerpts(used_entries)
             if lab8_binding is not None:
                 lab8_binding["retrieved_documents"] = _lab3_excerpts(used_entries)
             if blocked_reason:
+                _trace_call("skip", "context", "input_rejected")
+                _trace_call("skip", "ollama", "input_rejected")
                 reply = ("I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
                          if lab_id == 1 else LAB2_REFUSAL if lab_id == 2
                          else LAB4_REFUSAL if lab_id == 4
@@ -1703,6 +2184,7 @@ class Application:
                          else LAB9_REFUSAL if lab_id == 9
                          else "I can help with shop products and your own orders, but I cannot follow that request.")
             else:
+                context_span = _trace_call("begin", "context")
                 messages = build_messages(lab_id, snapshot, cleaned_message, used_entries)
                 if lab3_binding is not None:
                     lab3_messages = messages
@@ -1726,6 +2208,10 @@ class Application:
                     lab9_messages = copy.deepcopy(messages)
                     lab9_binding["model_context_sha256"] = _lab3_hash(messages)
                     lab9_binding["ollama_request_sha256"] = _lab5_request_hash(messages)
+                if lab_id != 1 or self.model is not local_model:
+                    _trace_call("end", context_span, "passed", "context_built")
+                if self.model is not _PRODUCTION_OLLAMA_MODEL:
+                    _trace_call("skip", "ollama", "non_production_model")
                 if lab_id == 1 and self.model is local_model:
                     messages[0]["content"] += (
                         "\n\nOnly for questions asking for current measurement values, call get_boiler_status before "
@@ -1759,6 +2245,7 @@ class Application:
                         return self.execute_boiler_tool(sid, snapshot["attempt"], "set_boiler_inputs", arguments,
                                                         turn_id=turn_id, tool_events=tool_events)
 
+                    _trace_call("end", context_span, "passed", "context_built")
                     try:
                         reply = self.model(messages, tools=BOILER_TOOLS, get_boiler_status=get_boiler_status,
                                            set_boiler_inputs=set_boiler_inputs)
@@ -1823,9 +2310,14 @@ class Application:
             if lab2_live:
                 model_reply = reply
             if not blocked_reason:
-                reply, blocked_reason = defend_output(reply, level, lab_id=lab_id)
-                if lab_id == 1 and blocked_reason:
-                    reply = "I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
+                with _trace_stage("output_protection") as output_span:
+                    reply, blocked_reason = defend_output(reply, level, lab_id=lab_id)
+                    if lab_id == 1 and blocked_reason:
+                        reply = "I can help monitor the boiler and explain its readings. As a read-only auditor, you cannot authorize equipment changes."
+                    _trace_call("end", output_span, "blocked" if blocked_reason else "passed",
+                                "output_rejected" if blocked_reason else "output_allowed")
+            else:
+                _trace_call("skip", "output_protection", "input_rejected")
             if lab_id == 8 and blocked_reason:
                 # Only application-generated refusals change terminology.
                 # Keep the original decision, reason and defense thresholds.
@@ -1847,6 +2339,11 @@ class Application:
             history = snapshot["messages"] + [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
             # Only this turn's native executions count; saved audit events are
             # never evaluated again, including events from failed generations.
+            verification_span = None
+            if lab_id == 7 and blocked_reason:
+                _trace_call("skip", "exploit_verification", "protection_rejected")
+            else:
+                verification_span = _trace_call("begin", "exploit_verification")
             if lab_id == 1:
                 triggered = any(event["exploit_verified"] for event in tool_events)
             elif lab_id == 3:
@@ -1898,7 +2395,9 @@ class Application:
                 triggered = check_exploit(lab_id, message, reply, history, used_entries, level)
             else:
                 triggered = not blocked_reason and check_exploit(lab_id, message, reply, history, used_entries, level)
+            commit_span = _trace_call("begin", "session", "waiting", "lock_wait")
             with self.session_lock(sid):
+                _trace_call("running", commit_span)
                 _, data = self.store.get(sid)
                 record = data["labs"][str(lab_id)]
                 if record["attempt"] != snapshot["attempt"]:
@@ -1993,7 +2492,10 @@ class Application:
                         raise APIError(409, "Lab 9 changed while the AI was replying. The old response was discarded.")
                 else:
                     self.store.save(sid, data)
-                return self.lab_result(sid, lab_id, data, request_id=request_id)
+                result = self.lab_result(sid, lab_id, data, request_id=request_id)
+                _trace_call("end", commit_span, "passed", "session_saved")
+                _trace_call("verification_result", verification_span, lab_id, data["labs"][str(lab_id)])
+                return result
         except Exception:
             if lab3_binding is not None and not lab3_saved:
                 receipt = _lab3_receipt(lab3_binding, lab3_generated, None)
@@ -2182,6 +2684,11 @@ def make_handler(app):
             self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(raw)))
             self.send_header("Cache-Control", "no-store")
+            if self.path == "/api/state":
+                self.send_header("X-Trace-Transport", "sse-v1")
+            trace = _ACTIVE_TRACE.get()
+            if trace is not None and trace.student_id is not None:
+                self.send_header("X-Trace-Id", trace.trace_id)
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "same-origin")
             self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -2207,6 +2714,125 @@ def make_handler(app):
             if sid and not re.fullmatch(r"[A-Za-z0-9_-]{43}", sid):
                 sid = None
             return app.store.get(sid)
+
+        def trace_session(self):
+            sid = _trace_cookie(self.headers.get("Cookie", ""))
+            if sid is None:
+                raise APIError(401, "Open the lab before requesting a trace.")
+            return sid
+
+        def stream_trace(self, trace_id):
+            sid = self.trace_session()
+            origin = self.headers.get("Origin")
+            if origin and urlsplit(origin).netloc != self.headers.get("Host"):
+                raise APIError(403, "Open the app directly to view its trace.")
+            query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+            if any(view.strip().lower() != "student" for view in query.get("view", [])):
+                # The nine-lab app has session ownership but no instructor role.
+                # Client role hints must never enable privileged diagnostics.
+                raise APIError(403, "Instructor diagnostics are not available for this session.")
+            cursor = self.headers.get("Last-Event-ID", query.get("after", ["0"])[0])
+            if not re.fullmatch(r"[0-9]{1,9}", cursor) or int(cursor) > TRACE_MAX_EVENTS + 1:
+                raise APIError(400, "Invalid event cursor.")
+            after = int(cursor)
+            try:
+                record, events = app.store.read_trace(sid, trace_id, after)
+            except APIError:
+                raise
+            except Exception:
+                raise APIError(503, "The trace stream is unavailable. Chat is still available.") from None
+            student_id = record["student_id"]
+            if not app.store.trace_streams.acquire(student_id):
+                raise APIError(429, "Too many trace streams are open.")
+            started, heartbeat = time.monotonic(), time.monotonic()
+            previous_timeout = self.connection.gettimeout()
+            try:
+                self.connection.settimeout(2)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store, no-transform")
+                self.send_header("X-Accel-Buffering", "no")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(b"retry: 500\n: connected\n\n")
+                self.wfile.flush()
+
+                def send(event, *, durable=True):
+                    value = {"trace_id": trace_id, **event, "persisted": durable}
+                    terminal = event["stage"] == "trace"
+                    raw = json.dumps(value, separators=(",", ":"), allow_nan=False)
+                    # A transport-only failure never advances the durable
+                    # cursor, nor claims the student's prompt was blocked.
+                    prefix = f"id: {event['event_id']}\n" if durable else ""
+                    self.wfile.write((prefix + ("event: terminal\n" if terminal else "event: stage\n") +
+                                      "data: " + raw + "\n\n").encode())
+                    self.wfile.flush()
+
+                def stream_error(reason):
+                    send({"event_id": after+1, "span_id": 0, "stage": "trace", "status": "error",
+                          "timestamp": time.time(), "duration_ms": round((time.monotonic()-started)*1000, 3),
+                          "reason_code": reason, "scope": "stream"}, durable=False)
+
+                while True:
+                    for event in events:
+                        send(event)
+                        after = event["event_id"]
+                        if event["stage"] == "trace":
+                            return
+                    if len(events) == 64:
+                        try:
+                            record, events = app.store.read_trace(sid, trace_id, after)
+                        except Exception:
+                            stream_error("stream_unavailable")
+                            return
+                        continue
+                    if record["finished_at"] is not None:
+                        # A reconnect already beyond the terminal cursor gets
+                        # an explicit end marker without duplicating an award
+                        # or manufacturing another persisted pipeline event.
+                        self.wfile.write(b"event: end\ndata: {}\n\n")
+                        self.wfile.flush()
+                        return
+                    notice = app.store.trace_streams.terminal(trace_id)
+                    if notice is not None:
+                        # Completion may have committed just after our read
+                        # snapshot. Drain its durable terminal before using the
+                        # failure-only notice; do not mistake this race for an
+                        # unavailable stream.
+                        try:
+                            record, events = app.store.read_trace(sid, trace_id, after)
+                        except Exception:
+                            stream_error("stream_unavailable")
+                            return
+                        if events or record["finished_at"] is not None:
+                            continue
+                        stream_error("stream_unavailable")
+                        return
+                    age = time.time() - (record["started_at"] or record["created_at"])
+                    if age > (TRACE_RESERVATION_SECONDS if record["state"] == "reserved" else TRACE_RUN_SECONDS):
+                        stream_error("stream_timeout")
+                        return
+                    if time.monotonic()-started >= TRACE_STREAM_SECONDS:
+                        return  # EventSource reconnects with Last-Event-ID.
+                    if time.monotonic()-heartbeat >= TRACE_HEARTBEAT_SECONDS:
+                        self.wfile.write(b": heartbeat\n\n"); self.wfile.flush()
+                        heartbeat = time.monotonic()
+                    time.sleep(TRACE_POLL_SECONDS)
+                    try:
+                        record, events = app.store.read_trace(sid, trace_id, after)
+                    except Exception:
+                        stream_error("stream_unavailable")
+                        return
+            except (OSError, ValueError):
+                pass
+            finally:
+                self.close_connection = True
+                app.store.trace_streams.release(student_id)
+                try:
+                    self.connection.settimeout(previous_timeout)
+                except OSError:
+                    pass
 
         def proxy_capstone(self, method):
             path = urlsplit(self.path).path
@@ -2245,6 +2871,9 @@ def make_handler(app):
         def do_GET(self):
             try:
                 path = urlsplit(self.path).path
+                trace_route = re.fullmatch(r"/api/traces/([a-f0-9]{32})/events", path)
+                if trace_route:
+                    return self.stream_trace(trace_route[1])
                 if path.startswith("/api/killchain/"):
                     return self.proxy_capstone("GET")
                 if path == "/api/state":
@@ -2259,6 +2888,9 @@ def make_handler(app):
                         pass
                     return self.respond(200, {"status": "ok", "ai_ready": ready, "model": MODEL})
                 files = {"/app.js": ("static/app.js", "text/javascript; charset=utf-8"),
+                         "/trace-timeline.js": ("static/trace-timeline.js", "text/javascript; charset=utf-8"),
+                         "/trace-timeline.css": ("static/trace-timeline.css", "text/css; charset=utf-8"),
+                         "/trace-stream.js": ("static/trace-stream.js", "text/javascript; charset=utf-8"),
                          "/flag-ui.js": ("static/flag-ui.js", "text/javascript; charset=utf-8"),
                          "/boiler.js": ("static/boiler.js", "text/javascript; charset=utf-8"),
                          "/boiler.css": ("static/boiler.css", "text/css; charset=utf-8"),
@@ -2287,6 +2919,19 @@ def make_handler(app):
         def do_POST(self):
             sid = None
             request_id = secrets.token_hex(16) if self.path.startswith(("/api/labs/8/", "/api/labs/9/")) else None
+            trace_token = None
+            trace_error = None
+            http_input_span = None
+            chat_route = re.fullmatch(r"/api/labs/([1-9])/chat", self.path)
+            if chat_route:
+                try:
+                    trace = app.create_chat_trace(int(chat_route[1]), self.headers.get("Cookie", ""),
+                                                  self.headers.get("X-Trace-Id"))
+                except Exception:
+                    trace = None
+                trace_token = _ACTIVE_TRACE.set(trace)
+                _trace_call("bind_cookie", self.headers.get("Cookie", ""))
+                http_input_span = _trace_call("begin", "input")
             try:
                 origin = self.headers.get("Origin")
                 if origin and urlsplit(origin).netloc != self.headers.get("Host"):
@@ -2307,13 +2952,23 @@ def make_handler(app):
                     raise APIError(400, "This request could not be read.")
                 if not isinstance(body, dict):
                     raise APIError(400, "Send a JSON object.")
-                match = re.fullmatch(r"/api/labs/([1-9])/(chat|kb|flag|reset|defense|boiler|alerts)", self.path)
+                _trace_call("end", http_input_span, "passed", "input_validated")
+                match = re.fullmatch(r"/api/labs/([1-9])/(chat|kb|flag|reset|defense|boiler|alerts|traces)", self.path)
                 if not match:
                     raise APIError(404, "Lab or action not found.")
                 lab_id, action = int(match[1]), match[2]
                 if action in {"boiler", "alerts"} and lab_id != 1:
                     raise APIError(404, "Lab or action not found.")
-                sid, _ = self.session()
+                if action == "traces":
+                    try:
+                        return self.respond(201, app.store.reserve_trace(self.trace_session(), lab_id))
+                    except APIError:
+                        raise
+                    except Exception:
+                        raise APIError(503, "Trace setup is unavailable. Chat is still available.") from None
+                with _trace_stage("session"):
+                    sid, session_data = self.session()
+                    _trace_call("bind", sid, session_data["labs"][str(lab_id)])
                 if action == "chat":
                     result = (app.chat(sid, lab_id, body, request_id=request_id) if lab_id in (8, 9)
                               else app.chat(sid, lab_id, body))
@@ -2333,13 +2988,20 @@ def make_handler(app):
                     result["request_id"] = request_id
                 self.respond(200, result, sid=sid)
             except APIError as exc:
+                trace_error = exc
                 self.respond(exc.status, {"error": str(exc), **({"request_id": request_id} if request_id else {})}, sid=sid)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                trace_error = exc
                 pass
-            except Exception:
+            except Exception as exc:
+                trace_error = exc
                 logging.exception("Request failed")
                 self.respond(500, {"error": "Something went wrong. Your saved progress is safe; please try again.",
                                    **({"request_id": request_id} if request_id else {})}, sid=sid)
+            finally:
+                if trace_token is not None:
+                    _trace_call("close", trace_error)
+                    _ACTIVE_TRACE.reset(trace_token)
 
     return Handler
 

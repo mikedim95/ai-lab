@@ -18,6 +18,14 @@ function node(tag, className, text) {
   return result;
 }
 function currentLab() { return state.labs[String(state.current)]; }
+function traceContext(record) {
+  return {attempt:record?.attempt ?? record?.state_version?.[0] ?? record?.boiler_version?.[0] ?? record?._extractionVersion?.[0] ?? null,
+    difficulty:record?.defense_level || 0};
+}
+function traceUI(method, ...args) {
+  try { return globalThis.TraceTimeline?.[method]?.(...args); }
+  catch { return null; } // Optional visualization must remain independent of chat.
+}
 function assistantName() { return 'Plant AI'; }
 // Apply the display name without changing saved replies or evaluation inputs.
 function assistantBranding(text) { return text.replace(/\bCracky(?:\s+AI)?\b/gi, 'Plant AI'); }
@@ -114,11 +122,16 @@ function lab9Progress(record) {
   return { status: states[step][0], label: states[step][1], step };
 }
 
-async function api(path, body) {
+async function api(path, body, trace = null) {
   const options = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  if (trace && options.headers) options.headers['X-Trace-Id'] = trace.trace_id;
   let response;
   try { response = await fetch(path, options); }
   catch { throw new Error('Could not reach the lab. Check the connection and try again.'); }
+  try {
+    if (path === '/api/state') globalThis.ChatTraceTransport?.enable(response.headers?.get?.('X-Trace-Transport') === 'sse-v1');
+    trace?.validate(response.headers?.get?.('X-Trace-Id'));
+  } catch { /* Telemetry cannot affect the chat response. */ }
   let result;
   try { result = await response.json(); }
   catch { throw new Error('The lab returned an unexpected response. Please reload and try again.'); }
@@ -883,6 +896,7 @@ function drawLab() {
   drawLab2Progress();
   drawWorkspace();
   drawNavigation(); drawConversation(); drawFlag(); drawHints(); drawKnowledge(); updateControls();
+  traceUI('showLab', state.current, traceContext(record));
 }
 
 function navigate(id, push = true) {
@@ -929,6 +943,7 @@ async function sendMessage(event) {
   const requestVersion = id === 2 ? state.labs['2']?._extractionVersion : null;
   const requestLab8 = id === 8 ? state.labs['8'] : null;
   const pendingRequest = { message, started: Date.now() };
+  const timelineTicket = traceUI('begin', id, traceContext(state.labs[String(id)]));
   if (id === 6) state.labs['6'] = { ...state.labs['6'], last_result: null };
   state.pending.set(id, pendingRequest);
   state.promptDrafts.set(id, '');
@@ -938,8 +953,14 @@ async function sendMessage(event) {
   if (id === 8) drawWorkspace();
   if (id === 2) drawLab2Progress();
   updateControls();
+  let trace = null;
   try {
-    const response = await api(`/api/labs/${id}/chat`, { message, use_kb: state.labs[String(id)].use_kb });
+    if (globalThis.ChatTraceTransport) {
+      try { trace = await globalThis.ChatTraceTransport.start(id); } catch { /* Chat remains independent of tracing. */ }
+    }
+    if (trace) pendingRequest.trace_id = trace.trace_id;
+    traceUI('bind', timelineTicket, trace);
+    const response = await api(`/api/labs/${id}/chat`, { message, use_kb: state.labs[String(id)].use_kb }, trace);
     if ((id === 2 || id === 8) && state.pending.get(id) !== pendingRequest) return;
     if (id === 8 && (!response.request_id || response.request_id !== response.lab?.last_result?.request_id)) {
       throw new Error('The reply does not match this request. Reload and try again.');
@@ -955,6 +976,8 @@ async function sendMessage(event) {
     if (state.current === id) drawLab();
     showError(`Lab ${id}: ${error.message}`);
   } finally {
+    try { trace?.complete(); } catch { /* Telemetry cannot affect chat cleanup. */ }
+    traceUI('finish', timelineTicket);
     if (id === 2 && state.current === 2) drawLab2Progress();
     updateControls();
     if (state.current === id) $('prompt').focus({ preventScroll: true });
@@ -1101,6 +1124,7 @@ async function restartLab() {
     if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return;
     if (id === 9 && staleLab9Response(state.labs['9'], response.lab)) return;
     for (const map of [state.promptDrafts, state.flagDrafts, state.editors, state.hintCounts, state.kbNotices, state.flagFeedback]) map.delete(id);
+    traceUI('reset', id, traceContext(response.lab));
     acceptResponse(id, response);
   } catch (error) {
     if (id === 8 && staleLab8Response(state.labs['8'], requestLab8)) return;
@@ -1140,6 +1164,7 @@ async function changeDefense() {
     if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return;
     if (id === 9 && staleLab9Response(state.labs['9'], response.lab)) return;
     for (const map of [state.promptDrafts, state.flagDrafts, state.flagFeedback]) map.delete(id);
+    traceUI('reset', id, traceContext(response.lab));
     acceptResponse(id, response);
   } catch (error) {
     if (staleLab2Request(id, requestVersion)) return;

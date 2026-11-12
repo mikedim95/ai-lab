@@ -255,6 +255,148 @@ python3 tests/live_ctfs.py http://127.0.0.1:3002
 
 Sample attempts depend on the model’s behavior. A failed attempt is not marked complete.
 
+## Private chat execution events
+
+The nine-lab backend records actual chat execution in `chat_traces` and
+`chat_trace_events` in the existing SQLite database. These private tables are
+separate from student state and verification evidence. The capstone keeps its
+existing event infrastructure. The shared nine-lab page displays the execution
+timeline below the conversation and workspace.
+
+Each prompt has a random `trace_id`, an opaque digest of its server-issued
+student session, lab, saved difficulty, attempt, and chat turn ID. Events pair
+stage spans with `waiting`, `running`, `passed`, `blocked`, `skipped`, or `error`,
+Unix timestamps, monotonic `duration_ms`, and allowlisted `reason_code` values.
+They cover input validation, session admission/loading/commit, input policy,
+context construction, enabled RAG and retrieval screening, each real Ollama
+request, native tool dispatch/authorization/execution, output protection, and
+the existing exploit verification path. Unused or unreached components are
+explicitly skipped. Injected test models never claim an Ollama execution.
+
+Backend rejections are blocked events. An unmet exploit condition is a passed
+verification check with `condition_not_met`; it is not a backend block. Lab 9's
+existing genuine-refusal receipts project `model_refusal` without copying their
+contents. Other model replies retain `model_response` and never become backend
+blocks based on their wording. Trace rows contain no messages, system prompts,
+retrieved records, tool arguments, flag values, bearer cookies, or exception
+text. Events cannot supply verification evidence or award points.
+
+Trace writes use short independent transactions with a 25 ms SQLite timeout.
+A tracing failure disables further stage telemetry for that prompt, without changing
+its processing or response. Failed writes may leave an incomplete trace; later
+stages are never fabricated as successful. Run the isolated focused tests with
+`python3 -S -B -m unittest discover -s tests -p test_chat_trace.py`.
+
+### Live transport
+
+The existing authenticated session can reserve a trace with
+`POST /api/labs/{lab}/traces` and an empty JSON object. The response immediately
+returns `trace_id` and `events_url`. The chat request supplies that reservation
+in `X-Trace-Id`; only the owning student, matching lab, difficulty and attempt
+can claim it, once. Invalid, expired or replayed reservations fall back to an
+independent trace without changing the chat. The chat response header reports
+its actual `X-Trace-Id`.
+
+`GET /api/traces/{trace_id}/events` uses SSE and requires the existing session
+cookie. The read-only stream projects `event_id`, `span_id`, `stage`, `status`,
+`timestamp`, `duration_ms`, and allowlisted `reason_code`, plus the trace ID and
+numeric `metadata: {lab_id, difficulty, attempt}` from the saved trace.
+`stage` events describe actual pipeline transitions; a final `terminal` event
+uses stage `trace` and status `passed`, `blocked`, or `error`. Durable events have
+`persisted: true`; reconnect using `Last-Event-ID` or `?after={event_id}` to replay
+later events in order. `end` closes a subscription that already acknowledged its
+terminal event. Stream-only failures use `scope: stream`, `persisted: false`,
+and no SSE cursor ID; they never claim that the student's chat failed.
+Transient `stream_unavailable` notices retry from the last durable cursor using
+the existing reconnect and lifetime limits.
+
+New terminal frames also project a canonical `outcome`: `COMPLETED`,
+`MODEL_REFUSED`, `BACKEND_BLOCKED`, `NO_EXPLOIT`, `EXPLOIT_VERIFIED`, or `ERROR`.
+This is saved atomically with the terminal event in the private trace header.
+It reads only the actual request return and current verification/refusal
+evidence; earned completion cannot verify another attempt. Recovered native
+tool success can therefore remain `EXPLOIT_VERIFIED` even if a model follow-up
+recorded an error. Rejected reference sources alone do not imply that the whole
+request was rejected. Missing or failed telemetry leaves the outcome unknown.
+
+The client negotiates support through `X-Trace-Transport: sse-v1` on `/api/state`,
+subscribes before sending chat, and exposes read-only state through
+`ChatTraceTransport.get(trace_id)` and `panoptis:trace-start`,
+`panoptis:trace-event`, and `panoptis:trace-stream-error` window events. The
+transport itself renders no UI. Duplicate events are ignored; gaps reconnect from the last accepted
+cursor. Superseded connections and regressing span states cannot replace newer
+state. Reservation setup times out after 750 ms and falls back to ordinary chat.
+
+Limits: four active reservations/executions and two streams per student, sixteen
+streams globally, 256 stage events plus one durable terminal per trace, 60 seconds
+per connection, 10-second heartbeats and two-second socket write timeouts.
+Unused reservations expire after 30 seconds. The browser holds one active source,
+eight recent traces, at most 257 events each, twenty reconnect attempts and a
+15-minute lifetime. Finished connections release their slots immediately. A
+128-entry completion cache covers failed terminal writes without subscriber
+queues. Reservation maintenance removes expired unused reservations and prunes
+older finished replay history in bounded batches, retaining the newest 200 per
+student. None of these limits cancel or reject the underlying chat request.
+
+Focused checks: `python3 -S -B -m unittest discover -s tests -p test_trace_stream.py`,
+`node --test tests/test_trace_stream.cjs`, and
+`node scripts/check_trace_stream_browser.cjs` with Playwright installed. All use
+temporary identities/databases and mocked Ollama transport.
+
+### Execution timeline
+
+`trace-timeline.js` consumes the existing validated SSE cache; DOM notifications
+are wake-ups, never independent execution evidence. The idle card expands on
+submission, before optional reservation setup completes. Eight connected,
+clickable nodes group the actual input, session, policy, context/RAG, Ollama,
+native-tool, output-protection, and exploit-verification spans. Elapsed clocks
+start only from real running/waiting events; finish durations come from the
+backend. Skipped optional components remain skipped. The panel reserves a bottom
+row inside the nine-lab viewport, keeping the conversation and workspace above
+it. Long chat, scenario, workspace and inspector content scrolls inside bounded
+regions, so the timeline stays visible without scrolling the page. It has a chat
+shortcut and horizontal stage scrolling on mobile. Reduced-motion preferences
+disable pulses and connection animations.
+
+Green means successful processing; blue means a confirmed active stage; red
+means an enforced backend rejection; amber means an explicitly evidenced model
+refusal or an unmet objective. Gray covers pending, skipped, paused or unknown
+operations. Processing errors are explicitly labeled without inventing a red
+security rejection. The final outcome panel uses the canonical backend enum;
+ambiguous legacy evidence remains unconfirmed.
+
+Medium and Hard use the same component path with their saved difficulty labels.
+Policy, context, retrieval and output protections retain their existing
+difficulty-specific behavior; the UI invents no additional Hard defense layer.
+Each student inspector shows only safe component names, statuses, timings, and
+generic reason codes. No prompt/reply text, protected values, flags, evidence
+receipts, thresholds or precise rejected-control identifiers enter the widget.
+
+The latest trace for each lab is retained within the page until another prompt
+is submitted in that lab. New attempts keep the old result clearly labeled
+as historical, close its subscription, and cannot merge new events into it.
+Leaving a lab closes the live source; returning resumes authorized replay.
+Pending reservations are fenced on navigation, and late callbacks cannot
+replace the displayed trace. If the small transport cache evicts an inactive
+trace, its known ID, metadata and accepted cursor can restore authenticated
+replay within a five-second replay-only window, without creating another trace
+or prompt. Only one live source is kept active.
+
+Known instrumentation gaps are explicit: genuine model-refusal classification
+currently comes only from Lab 9's existing refusal receipts; other labs do not
+guess from model wording. The nine-lab app has no instructor authorization role,
+and detailed rejected-control identifiers are not recorded by the student-safe
+trace schema. Instructor diagnostic requests are denied by the backend, including
+forged role headers. No frontend switch can elevate a student.
+
+Focused UI checks: `node --test tests/test_trace_timeline.cjs`, the transport
+suite above, `python3 -S -B -m unittest discover -s tests -p test_trace_projection.py`,
+`node scripts/check_trace_timeline_browser.cjs`, and
+`node scripts/check_trace_layout_browser.cjs`. Browser fixtures use actual
+HTTP/SSE with disposable identities and mocked Ollama transport. Layout checks
+cover all nine labs at desktop, phone and landscape viewport sizes, including
+expanded stages, keyboard focus, captured flags and error notifications.
+
 ## Source and licensing
 
 Original challenges and capstone: [AISecurityConsortium/AIGoat](https://github.com/AISecurityConsortium/AIGoat), from the installed source at commit `bb3cd1bbd1e051d16b8cceaa9467676d5e47d7ac`, including the installation’s existing client/config fixes. See [ATTRIBUTION.md](ATTRIBUTION.md) and the original notices under `upstream/`. Training content and adaptations retain CC BY-NC-SA 4.0 terms; upstream platform code retains Apache 2.0 terms.

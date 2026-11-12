@@ -9,9 +9,12 @@
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/boiler.css">
+  <link rel="stylesheet" href="/trace-timeline.css">
   <script src="/intro.js" defer></script>
   <script src="/boiler.js" defer></script>
   <script src="/flag-ui.js" defer></script>
+  <script src="/trace-stream.js" defer></script>
+  <script src="/trace-timeline.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -41,13 +44,32 @@
         </div>
       </aside>
       <section class="chat-card" aria-label="Lab conversation">
-        <div class="chat-header"><div class="bot-identity"><span class="bot-avatar" aria-hidden="true">PA</span><div><h2 id="assistant-name">Plant AI</h2><span id="chat-context">Boiler monitoring assistant</span></div><span id="turn-count">0 turns</span></div><div class="chat-tools"><button id="knowledge-button" class="tool-button" type="button" hidden>Knowledge base</button><button id="flag-button" class="tool-button" type="button">Submit flag</button></div></div>
+        <div class="chat-header"><div class="bot-identity"><span class="bot-avatar" aria-hidden="true">PA</span><div><h2 id="assistant-name">Plant AI</h2><span id="chat-context">Boiler monitoring assistant</span></div><span id="turn-count">0 turns</span></div><div class="chat-tools"><a class="tool-button trace-shortcut" href="#execution-timeline">Live trace</a><button id="knowledge-button" class="tool-button" type="button" hidden>Knowledge base</button><button id="flag-button" class="tool-button" type="button">Submit flag</button></div></div>
         <div id="messages" class="messages" role="log" aria-label="Conversation" aria-live="polite"></div>
         <div id="attempt-result" class="attempt-result" hidden role="status"></div>
         <form id="chat-form" class="composer"><label id="prompt-label" class="sr-only" for="prompt">Your message to Plant AI</label><textarea id="prompt" name="prompt" maxlength="4000" rows="2" placeholder="Ask Plant AI a question or try an attack…" required></textarea><div class="composer-bottom"><span id="composer-help">Enter to send · Shift + Enter for a new line</span><button id="send" class="primary-button" type="submit">Send ↗</button></div></form>
       </section>
       <aside class="lab-tools" aria-labelledby="workspace-heading"><header class="column-heading workspace-heading"><h2 id="workspace-heading">LAB WORKSPACE</h2><span id="workspace-label">Lab 01</span></header><div id="workspace-content" class="workspace-content"></div></aside>
       </div>
+      <section id="execution-timeline" class="execution-timeline" aria-labelledby="trace-title" data-state="idle" tabindex="-1">
+        <header class="trace-heading">
+          <div class="trace-heading-copy"><h2 id="trace-title"><span class="trace-live-dot" aria-hidden="true"></span>Execution trace</h2><p id="trace-difficulty">Selected difficulty</p></div>
+          <div class="trace-heading-actions"><span id="trace-total-duration" class="trace-total-duration" aria-label="Total processing duration">—</span><button id="trace-toggle" type="button" class="quiet-button" aria-expanded="false" aria-controls="trace-content">Show pipeline</button></div>
+        </header>
+        <div class="trace-outcome"><strong id="trace-outcome-label" role="status" aria-live="polite" data-tone="gray">READY</strong><p id="trace-summary">Submit a prompt to inspect its real execution path.</p></div>
+        <div id="trace-content" hidden>
+          <div class="trace-track" tabindex="0" aria-label="Execution stages. Scroll horizontally to inspect all stages."><ol id="trace-nodes" class="trace-nodes"></ol></div>
+          <div class="trace-key" aria-label="Stage color key"><span data-tone="green">Passed</span><span data-tone="blue">Processing</span><span data-tone="red">Backend rejection</span><span data-tone="amber">Refusal / not verified</span><span data-tone="gray">Pending / skipped</span></div>
+          <section id="trace-inspector" class="trace-inspector" aria-labelledby="trace-inspector-title" hidden>
+            <div class="trace-inspector-heading"><h3 id="trace-inspector-title">Stage</h3><button id="trace-inspector-close" type="button" class="quiet-button" aria-label="Close stage details">Close</button></div>
+            <div class="trace-inspector-metrics"><span id="trace-inspector-status" class="trace-status-pill"></span><span id="trace-inspector-duration"></span></div>
+            <p id="trace-inspector-description"></p><p id="trace-inspector-explanation" class="trace-diagnostic-explanation"></p>
+            <p class="trace-reason">Reason code <code id="trace-inspector-reason">Not reported</code></p>
+            <ul id="trace-inspector-events" class="trace-inspector-events" aria-label="Confirmed component operations"></ul>
+            <p class="trace-student-note">Student diagnostics · Backend-confirmed metadata only. Detailed instructor controls are unavailable.</p>
+          </section>
+        </div>
+      </section>
       <div id="error" class="error" role="alert" hidden></div>
       <footer class="main-footer"><span>Original labs by <a href="https://github.com/AISecurityConsortium/AIGoat" target="_blank" rel="noreferrer">AIGoat</a> · <a href="/attribution" target="_blank" rel="noreferrer">Attribution</a></span><div class="step-links"><a id="previous-lab" href="/lab/1">← Previous</a><a id="next-lab" href="/lab/2">Next lab →</a></div></footer>
     </main>
