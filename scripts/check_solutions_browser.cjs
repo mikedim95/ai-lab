@@ -108,11 +108,13 @@ async function main(){
     assert(value.bodyScrolls&&value.headerFixed&&value.closeVisible&&!value.overflow&&value.font>=12,JSON.stringify(value));
     await close();
    });
-   await check(name+': unsupplied labs retain the placeholder and hint gating',async()=>{
+   await check(name+': missing solution fallback retains the placeholder and hint gating',async()=>{
+    const saved=await page.evaluate(()=>{const value=labSolutions[9];delete labSolutions[9];return value;});
     await open(9);assert.equal(await page.locator('#solution-content pre').count(),0);
     assert.match(await page.locator('#solution-content').innerText(),/Solution coming soon\./);
     await page.keyboard.press('Escape');await page.locator('#hint-button').click();
     assert.equal(await page.locator('#solution-button').isVisible(),false);
+    await page.evaluate(value=>{labSolutions[9]=value;},saved);
    });
    await check(name+': future directions and three prompts retain their order',async()=>{
     await page.locator('#lab-select').selectOption('9');
