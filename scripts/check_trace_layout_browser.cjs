@@ -35,7 +35,7 @@ async function main() {
       ? {executablePath:process.env.CHROMIUM_PATH,args:['--no-sandbox']} : {})});
     for(const [device,viewport] of layouts) {
       currentDevice=device;
-      const mobile=viewport.width<=1000;
+      const mobile=viewport.width<=1000,phone=viewport.width<=760;
       const extreme=viewport.height<480;
       const context=await browser.newContext({viewport,reducedMotion:'reduce',...(mobile?{hasTouch:true}: {})});
       const page=currentPage=await context.newPage(),errors=[];
@@ -68,10 +68,12 @@ async function main() {
         assert(Math.abs(value.window.y)<=1&&Math.abs(value.window.x)<=1,label+' page moved: '+JSON.stringify(value));
         assert(value.timeline.top>=-1&&value.timeline.bottom<=value.viewport.height+1,label+' timeline outside viewport: '+JSON.stringify(value));
         assert(value.timeline.height>40,label+' timeline has no readable height: '+JSON.stringify(value));
-        assert(value.workspace.bottom<=value.timeline.top+1,label+' workspace covered by timeline: '+JSON.stringify(value));
-        assert(value.workspace.height>=32||(extreme&&await page.locator('#trace-toggle').getAttribute('aria-expanded')==='true'),label+' workspace inaccessible: '+JSON.stringify(value));
+        const expanded=await page.locator('#trace-toggle').getAttribute('aria-expanded')==='true';
+        if(!phone||!expanded)assert(value.workspace.right<=value.timeline.left+1,label+' trace is not the rightmost column: '+JSON.stringify(value));
+        assert(Math.abs(value.workspace.top-value.timeline.top)<=1,label+' sidebar is not aligned with workspace: '+JSON.stringify(value));
+        assert(Math.abs(value.workspace.bottom-value.timeline.bottom)<=1,label+' sidebar changed workspace height: '+JSON.stringify(value));
+        assert(value.workspace.height>=32,label+' workspace inaccessible: '+JSON.stringify(value));
         assert((await painted('#trace-toggle')).painted,label+' timeline toggle is clipped');
-        assert((await painted('#trace-outcome-label')).painted,label+' timeline outcome is clipped');
         return value;
       };
       const openPipeline=async()=>{
@@ -81,7 +83,7 @@ async function main() {
         const region=await page.locator(selector).evaluate(element=>({workspace:Boolean(element.closest('.lab-workspace')),
           pipeline:Boolean(element.closest('#trace-content')),workspaceHeight:document.querySelector('.lab-workspace').clientHeight}));
         if(region.pipeline) await openPipeline();
-        if(extreme&&region.workspace&&region.workspaceHeight<32&&await page.locator('#trace-toggle').getAttribute('aria-expanded')==='true')
+        if(phone&&region.workspace&&await page.locator('#trace-toggle').getAttribute('aria-expanded')==='true')
           await page.locator('#trace-toggle').click();
         await page.locator(selector).evaluate(element=>{
           for(let parent=element.parentElement;parent&&parent!==document.body;parent=parent.parentElement) {
@@ -116,12 +118,33 @@ async function main() {
         assert.equal(await page.locator('#execution-timeline').getAttribute('data-state'),'idle');
       });
 
+      await check(device+': right sidebar collapses without taking workspace height and stages run vertically',async()=>{
+        await openPipeline();const opened=await rects();
+        const nodes=await page.locator('[data-trace-node]').evaluateAll(elements=>elements.map(element=>{
+          const r=element.getBoundingClientRect();return {left:r.left,top:r.top,bottom:r.bottom};
+        }));
+        assert(nodes.every((node,index)=>index===0||(node.top>=nodes[index-1].bottom&&Math.abs(node.left-nodes[0].left)<1)));
+        await screenshot('right-expanded');
+        await page.locator('#trace-toggle').click();const closed=await rects();
+        assert.equal(await page.locator('#trace-content').isVisible(),false);
+        assert(closed.timeline.width<=46);
+        assert(Math.abs(closed.workspace.height-opened.workspace.height)<=1);
+        assert(Math.abs(closed.workspace.top-opened.workspace.top)<=1);
+        if(!phone)assert(closed.workspace.width>opened.workspace.width+150);
+        await page.locator('#lab-select').selectOption('8');await page.waitForFunction(()=>state.current===8);
+        await page.locator('#lab-select').selectOption('9');await page.waitForFunction(()=>state.current===9);
+        assert.equal(await page.locator('#trace-toggle').getAttribute('aria-expanded'),'false','navigation must retain the collapsed preference');
+        await dock('collapsed right rail');await screenshot('right-collapsed');
+      });
+
       await check(device+': held genuine SSE activates the expanded timeline without covering the workspace',async()=>{
         await mode('normal',true);
         const message='Explain this public maintenance checklist:\n'+Array.from({length:36},(_,i)=>`Public checklist item ${i+1}: inspect the maintenance log.`).join('\n');
         await send(message);
         await page.waitForFunction(()=>document.querySelector('[data-trace-node="ollama"]').dataset.tone==='blue');
         assert.equal(await page.evaluate(()=>state.pending.has(9)),true);
+        assert.equal(await page.locator('#trace-toggle').getAttribute('aria-expanded'),'false','a prompt must preserve the chosen collapsed state');
+        await openPipeline();
         await dock('running');
         assert.equal(await page.locator('#trace-content').isVisible(),true);
         await reach('[data-trace-node="ollama"]','running stage');
@@ -131,7 +154,10 @@ async function main() {
             'desktop composer is not fully inside its workspace: '+JSON.stringify(value));
         }
         await screenshot('running');
+        await page.locator('#trace-toggle').click();
         await page.request.post(ready.url+'/test/release');await outcome('NO EXPLOIT');
+        assert.equal(await page.locator('#trace-toggle').getAttribute('aria-expanded'),'false','completion must retain the collapsed preference');
+        await openPipeline();
       });
       await check(device+': terminal timeline and conversation controls remain reachable through internal scrolling',async()=>{
         await dock('terminal');
@@ -145,20 +171,24 @@ async function main() {
           'long real conversation must scroll inside messages: '+JSON.stringify(chatScroll));
         await dock('conversation scrolled');
       });
-      await check(device+': all stages remain accessible by horizontal keyboard navigation',async()=>{
+      await check(device+': vertical stages remain accessible by Up, Down, Home and End',async()=>{
         await openPipeline();
-        await stage('input').scrollIntoViewIfNeeded();await stage('input').focus();await stage('input').press('End');
+        await stage('input').scrollIntoViewIfNeeded();await stage('input').focus();
+        await stage('input').press('ArrowDown');assert.equal(await page.evaluate(()=>document.activeElement?.dataset.traceNode),'session');
+        await stage('session').press('ArrowUp');assert.equal(await page.evaluate(()=>document.activeElement?.dataset.traceNode),'input');
+        await stage('input').press('End');
         assert.equal(await page.evaluate(()=>document.activeElement?.dataset.traceNode),'verification');
         assert((await painted('[data-trace-node="verification"]')).painted,'last stage clipped after End navigation');
-        const horizontal=await page.evaluate(()=>['.trace-track','#trace-content'].map(selector=>{
-          const element=document.querySelector(selector),before=element.scrollLeft;
-          if(element.scrollWidth>element.clientWidth+1)element.scrollLeft=element.scrollWidth;
-          return {selector,clientWidth:element.clientWidth,scrollWidth:element.scrollWidth,before,after:element.scrollLeft};
-        }));
-        const overflow=horizontal.filter(item=>item.scrollWidth>item.clientWidth+1);
-        if(overflow.length) assert(overflow.some(item=>item.after>0),'overflowing stage content cannot scroll internally: '+JSON.stringify(horizontal));
-        assert((await painted('[data-trace-node="verification"]')).painted,'last stage clipped after internal horizontal scroll: '+JSON.stringify(horizontal));
-        await dock('horizontal keyboard navigation');
+        const vertical=await page.locator('#trace-content').evaluate(element=>{
+          element.scrollTop=0;const before=element.scrollTop;element.scrollTop=element.scrollHeight;
+          return {client:element.clientHeight,height:element.scrollHeight,before,after:element.scrollTop,horizontal:element.scrollWidth>element.clientWidth+1};
+        });
+        assert(!vertical.horizontal,'vertical stages must not need horizontal scrolling');
+        if(vertical.height>vertical.client+1)assert(vertical.after>0,'stage body cannot scroll vertically');
+        await stage('verification').scrollIntoViewIfNeeded();
+        assert((await painted('[data-trace-node="verification"]')).painted,'last vertical stage is clipped');
+        await stage('verification').press('Home');assert.equal(await page.evaluate(()=>document.activeElement?.dataset.traceNode),'input');
+        await dock('vertical keyboard navigation');
       });
       await check(device+': stage inspector scrolls internally and restores visible keyboard focus',async()=>{
         await reach('[data-trace-node="session"]','session inspection control');await stage('session').click();assert.equal(await page.locator('#trace-inspector').isVisible(),true);

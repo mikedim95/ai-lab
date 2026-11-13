@@ -33,6 +33,7 @@
         <div class="heading-copy"><div class="lab-meta"><span id="lab-counter">LAB 01 OF 09</span><span id="difficulty">Beginner</span><span id="owasp">LLM01</span><span id="points">100 points</span><span id="lab-status">Ready to try</span></div><h1 id="lab-title" tabindex="-1">Prompt Injection</h1><p id="lab-description" class="lab-description">Convince Plant AI to change Water In and Fuel In without authorization.</p></div>
         <div class="heading-actions"><button id="restart-lab" class="quiet-button" type="button" title="Clear this lab’s chat, documents, flag, and points">Restart</button></div>
       </div>
+      <div class="lab-body">
       <div class="lab-workspace">
       <aside id="scenario-panel" class="scenario-column" aria-labelledby="scenario-heading">
         <header class="column-heading"><h2 id="scenario-heading">SCENARIO</h2></header>
@@ -51,14 +52,14 @@
       </section>
       <aside class="lab-tools" aria-labelledby="workspace-heading"><header class="column-heading workspace-heading"><h2 id="workspace-heading">LAB WORKSPACE</h2><span id="workspace-label">Lab 01</span></header><div id="workspace-content" class="workspace-content"></div></aside>
       </div>
-      <section id="execution-timeline" class="execution-timeline" aria-labelledby="trace-title" data-state="idle" tabindex="-1">
+      <section id="execution-timeline" class="execution-timeline" aria-labelledby="trace-title" data-state="idle" data-expanded="false" tabindex="-1">
         <header class="trace-heading">
           <div class="trace-heading-copy"><h2 id="trace-title"><span class="trace-live-dot" aria-hidden="true"></span>Execution trace</h2><p id="trace-difficulty">Selected difficulty</p></div>
-          <div class="trace-heading-actions"><span id="trace-total-duration" class="trace-total-duration" aria-label="Total processing duration">—</span><button id="trace-toggle" type="button" class="quiet-button" aria-expanded="false" aria-controls="trace-content">Show pipeline</button></div>
+          <div class="trace-heading-actions"><span id="trace-total-duration" class="trace-total-duration" aria-label="Total processing duration">—</span><button id="trace-toggle" type="button" class="quiet-button" aria-expanded="false" aria-controls="trace-content" aria-label="Expand execution trace"><span id="trace-toggle-icon" aria-hidden="true">‹</span><span id="trace-toggle-label">Execution trace</span><span class="trace-rail-dot" aria-hidden="true"></span></button></div>
         </header>
-        <div class="trace-outcome"><strong id="trace-outcome-label" role="status" aria-live="polite" data-tone="gray">READY</strong><p id="trace-summary">Submit a prompt to inspect its real execution path.</p></div>
         <div id="trace-content" hidden>
-          <div class="trace-track" tabindex="0" aria-label="Execution stages. Scroll horizontally to inspect all stages."><ol id="trace-nodes" class="trace-nodes"></ol></div>
+          <div class="trace-outcome"><strong id="trace-outcome-label" role="status" aria-live="polite" data-tone="gray">READY</strong><p id="trace-summary">Submit a prompt to inspect its real execution path.</p></div>
+          <div class="trace-track" tabindex="0" aria-label="Execution stages, from top to bottom. Use Up and Down to move between stages."><ol id="trace-nodes" class="trace-nodes"></ol></div>
           <div class="trace-key" aria-label="Stage color key"><span data-tone="green">Passed</span><span data-tone="blue">Processing</span><span data-tone="red">Backend rejection</span><span data-tone="amber">Refusal / not verified</span><span data-tone="gray">Pending / skipped</span></div>
           <section id="trace-inspector" class="trace-inspector" aria-labelledby="trace-inspector-title" hidden>
             <div class="trace-inspector-heading"><h3 id="trace-inspector-title">Stage</h3><button id="trace-inspector-close" type="button" class="quiet-button" aria-label="Close stage details">Close</button></div>
@@ -70,6 +71,7 @@
           </section>
         </div>
       </section>
+      </div>
       <div id="error" class="error" role="alert" hidden></div>
       <footer class="main-footer"><span>Original labs by <a href="https://github.com/AISecurityConsortium/AIGoat" target="_blank" rel="noreferrer">AIGoat</a> · <a href="/attribution" target="_blank" rel="noreferrer">Attribution</a></span><div class="step-links"><a id="previous-lab" href="/lab/1">← Previous</a><a id="next-lab" href="/lab/2">Next lab →</a></div></footer>
     </main>

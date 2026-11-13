@@ -182,7 +182,10 @@
   document.body.classList.add('has-execution-timeline');
   const $=id=>document.getElementById(id);
   const write=(id,value)=>{const element=$(id);if(element.textContent!==value)element.textContent=value;return element;};
-  const records=new Map(),views=new Map(),buttons=new Map(),expanded=new Map();
+  const records=new Map(),views=new Map(),buttons=new Map();
+  const phone=window.matchMedia('(max-width: 760px)');
+  const workspace=root.parentElement.querySelector('.lab-workspace');
+  let panelExpanded=window.matchMedia('(min-width: 1200px)').matches;
   let currentLab=null,sequence=0,timer=null;
   const clock=()=>performance.now();
   const contextOf=(lab,value={})=>({lab,attempt:Number.isSafeInteger(value.attempt)?value.attempt:null,
@@ -238,9 +241,15 @@
     root.dataset.state=snapshot.phase;root.dataset.traceId=snapshot.trace_id||'';
     root.dataset.historical=String(snapshot.historical);
     root.dataset.live=String(snapshot.nodes.some(item=>item.tone==='blue'));
-    $('trace-content').hidden=!expanded.get(currentLab);
-    $('trace-toggle').setAttribute('aria-expanded',String(Boolean(expanded.get(currentLab))));
-    $('trace-toggle').textContent=expanded.get(currentLab)?'Collapse':'Show pipeline';
+    root.dataset.expanded=String(panelExpanded);
+    $('trace-content').hidden=!panelExpanded;
+    workspace.inert=phone.matches&&panelExpanded;
+    $('trace-toggle').setAttribute('aria-expanded',String(panelExpanded));
+    $('trace-toggle').setAttribute('aria-label',`${panelExpanded?'Collapse':'Expand'} execution trace: ${snapshot.outcome.label}`);
+    $('trace-toggle').title=`${panelExpanded?'Collapse':'Expand'} execution trace`;
+    $('trace-toggle').dataset.tone=snapshot.outcome.tone;
+    write('trace-toggle-icon',panelExpanded?'›':'‹');
+    write('trace-toggle-label',panelExpanded?'Collapse':'Execution trace');
     write('trace-outcome-label',snapshot.outcome.label);$('trace-outcome-label').dataset.tone=snapshot.outcome.tone;
     write('trace-summary',snapshot.outcome.description);
     $('trace-difficulty').textContent=snapshot.metadata
@@ -292,8 +301,8 @@
     closeRecord(records.get(lab));globalThis.ChatTraceTransport?.cancelPending();
     const context=contextOf(lab,value),record=create(lab,context,++sequence,clock());
     record.wallStarted=Date.now();
-    records.set(lab,record);views.set(lab,context);expanded.set(lab,true);currentLab=lab;render();
-    root.querySelector('.trace-track').scrollLeft=0;
+    records.set(lab,record);views.set(lab,context);currentLab=lab;render();
+    $('trace-content').scrollTop=0;
     return Object.freeze({lab,generation:record.generation});
   }
 
@@ -324,17 +333,26 @@
     let record=records.get(currentLab);
     if(!record){record=create(currentLab,views.get(currentLab)||{},++sequence,clock());record.stream_status='unavailable';record.idle=true;records.set(currentLab,record);}
     record.selected=record.selected===button.dataset.traceNode?null:button.dataset.traceNode;render();
+    if(record.selected)$('trace-inspector').scrollIntoView({block:'nearest'});
   });
   $('trace-inspector-close').addEventListener('click',()=>{
     const record=records.get(currentLab),selected=record?.selected;if(record)record.selected=null;render();
-    buttons.get(selected)?.focus();
+    buttons.get(selected)?.focus();buttons.get(selected)?.scrollIntoView({block:'nearest'});
   });
-  $('trace-toggle').addEventListener('click',()=>{expanded.set(currentLab,!expanded.get(currentLab));render();});
+  $('trace-toggle').addEventListener('click',()=>{panelExpanded=!panelExpanded;render();});
+  document.querySelector('.trace-shortcut')?.addEventListener('click',event=>{
+    event.preventDefault();panelExpanded=true;render();$('trace-toggle').focus({preventScroll:true});
+  });
+  root.addEventListener('keydown',event=>{
+    if(event.key==='Escape'&&panelExpanded){event.preventDefault();panelExpanded=false;render();$('trace-toggle').focus({preventScroll:true});}
+  });
+  phone.addEventListener('change',event=>{if(event.matches)panelExpanded=false;render();});
   $('trace-nodes').addEventListener('keydown',event=>{
-    if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+    if(!['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
     const values=[...buttons.values()],index=values.indexOf(document.activeElement);if(index<0)return;
     event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?values.length-1
-      :(index+(event.key==='ArrowRight'?1:-1)+values.length)%values.length;values[next].focus();
+      :(index+(['ArrowDown','ArrowRight'].includes(event.key)?1:-1)+values.length)%values.length;
+    values[next].focus();values[next].scrollIntoView({block:'nearest',inline:'nearest'});
   });
   window.addEventListener('panoptis:trace-event',event=>{
     const record=records.get(currentLab);

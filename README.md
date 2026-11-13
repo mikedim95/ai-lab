@@ -21,7 +21,7 @@ Open **http://100.101.41.44:3002** over Tailscale, or **http://127.0.0.1:3002** 
 
 Each lab has its own URL (`/lab/1` through `/lab/9`), chat history, hints, attempt, flag, and completion status. Use the header selector or Previous/Next links to move between them. Direct links, refresh, and browser Back/Forward work.
 
-The desktop layout has three columns: **SCENARIO** on the left with the objective, attack surface, and hints; the widest column in the center for chat; and **LAB WORKSPACE** on the right. The scenario stays visible instead of opening in an introductory dialog. Choose a lab and its **Difficulty** in the header. The knowledge base and flag forms open on demand. On smaller screens, the workspace moves below chat and the columns stack as needed.
+The desktop workspace has three columns: **SCENARIO** on the left with the objective, attack surface, and hints; the widest column in the center for chat; and **LAB WORKSPACE** on the right. A collapsible **Execution trace** sits at the far right and shows prompt stages vertically. The scenario stays visible instead of opening in an introductory dialog. Choose a lab and its **Difficulty** in the header. The knowledge base and flag forms open on demand. On smaller screens, the workspace moves below chat and the columns stack as needed; the trace remains on the right.
 
 For the nine CTFs, **Easy / Vulnerable** preserves the original challenge behavior. **Medium / Hardened** adds prompt hardening, input validation, intent checks, and output moderation. **Hard / Guardrailed** applies stricter checks, screens retrieved documents for instructions, and reduces protected context. These controls reuse AIGoat's deterministic validators and moderators; they do not use NeMo. Changing a CTF's difficulty starts a fresh attempt and clears that lab's chat, flag, and points while keeping its knowledge base. Restart retains the selected difficulty. The capstone's three existing defense modes remain independent and preserve memory when switched.
 
@@ -261,7 +261,7 @@ The nine-lab backend records actual chat execution in `chat_traces` and
 `chat_trace_events` in the existing SQLite database. These private tables are
 separate from student state and verification evidence. The capstone keeps its
 existing event infrastructure. The shared nine-lab page displays the execution
-timeline below the conversation and workspace.
+timeline in a collapsible column at the far right of the workspace.
 
 Each prompt has a random `trace_id`, an opaque digest of its server-issued
 student session, lab, saved difficulty, attempt, and chat turn ID. Events pair
@@ -356,17 +356,19 @@ Trace security and retention regressions also run with
 ### Execution timeline
 
 `trace-timeline.js` consumes the existing validated SSE cache; DOM notifications
-are wake-ups, never independent execution evidence. The idle card expands on
-submission, before optional reservation setup completes. Eight connected,
+are wake-ups, never independent execution evidence. The sidebar opens by default
+on wide screens and collapses to a slim right-hand rail. Its open or collapsed
+state persists across prompts and lab navigation. Eight vertically connected,
 clickable nodes group the actual input, session, policy, context/RAG, Ollama,
 native-tool, output-protection, and exploit-verification spans. Elapsed clocks
 start only from real running/waiting events; finish durations come from the
-backend. Skipped optional components remain skipped. The panel reserves a bottom
-row inside the nine-lab viewport, keeping the conversation and workspace above
-it. Long chat, scenario, workspace and inspector content scrolls inside bounded
-regions, so the timeline stays visible without scrolling the page. It has a chat
-shortcut and horizontal stage scrolling on mobile. Reduced-motion preferences
-disable pulses and connection animations.
+backend. Skipped optional components remain skipped. The sidebar shares the
+workspace's full height; expanding it changes available width while preserving
+the conversation's height. Long chat, scenario, workspace and inspector
+content scrolls inside bounded regions. On phones, the sidebar opens from the
+right over the workspace and closes back to its rail. The chat shortcut opens
+it, Up/Down and Home/End navigate stages, and Escape collapses it. Reduced-motion
+preferences disable pulses and connection animations.
 
 Green means successful processing; blue means a confirmed active stage; red
 means an enforced backend rejection; amber means an explicitly evidenced model
@@ -405,7 +407,8 @@ suite above, `python3 -S -B -m unittest discover -s tests -p test_trace_projecti
 `node scripts/check_trace_layout_browser.cjs`. Browser fixtures use actual
 HTTP/SSE with disposable identities and mocked Ollama transport. Layout checks
 cover all nine labs at desktop, phone and landscape viewport sizes, including
-expanded stages, keyboard focus, captured flags and error notifications.
+vertical stages, collapse persistence, workspace height, keyboard focus,
+captured flags and error notifications.
 
 ## Source and licensing
 

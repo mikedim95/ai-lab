@@ -56,13 +56,19 @@ async function main() {
       const mode = async(name, hold=false) => {
         assert.equal((await page.request.post(ready.url + '/test/mode', {data:{mode:name,hold}})).status(), 200);
       };
+      const openPipeline = async() => {
+        if(await page.locator('#trace-toggle').getAttribute('aria-expanded')!=='true')await page.locator('#trace-toggle').click();
+      };
       const send = async(message='Explain public maintenance procedures.') => {
+        if(viewport.width<=760&&await page.locator('#trace-toggle').getAttribute('aria-expanded')==='true')await page.locator('#trace-toggle').click();
         await page.locator('#prompt').fill(message);
         await page.locator('#prompt').press('Enter');
       };
       const waitOutcome = async label => {
         await page.waitForFunction(expected => document.getElementById('trace-outcome-label').textContent.trim() === expected, label);
         await page.waitForFunction(() => state.pending.size === 0);
+        await dismissFlag();
+        await openPipeline();
       };
       const dismissFlag = async() => {
         if (await page.locator('#flag-capture-dialog').evaluate(element => element.open)) {
@@ -86,17 +92,18 @@ async function main() {
       };
       let normalId, activeId, winId;
 
-      await check(device + ': compact idle timeline is below the entire lab workspace', async() => {
+      await check(device + ': idle timeline is a rightmost vertical sidebar', async() => {
         assert.equal(await timeline.getAttribute('data-state'), 'idle');
         assert.equal(await page.locator('#trace-inspector').isVisible(), false);
         assert.deepEqual(await timeline.locator('button[data-trace-node]').evaluateAll(nodes => nodes.map(node => node.dataset.traceNode)), pipeline);
-        assert.equal(await timeline.locator('button[data-tone="gray"]').count(), 8);
+        assert.equal(await timeline.locator('button[data-trace-node][data-tone="gray"]').count(), 8);
         const geometry = await page.evaluate(() => {
           const trace = document.getElementById('execution-timeline').getBoundingClientRect();
           const workspace = document.querySelector('.lab-workspace').getBoundingClientRect();
-          return {below:trace.top >= workspace.bottom-1,overflow:document.documentElement.scrollWidth>innerWidth+1};
+          return {right:trace.left >= workspace.right-1,aligned:Math.abs(trace.top-workspace.top)<1,overflow:document.documentElement.scrollWidth>innerWidth+1};
         });
-        assert(geometry.below && !geometry.overflow);
+        assert(geometry.right&&geometry.aligned&&!geometry.overflow);
+        await openPipeline();
       });
 
       await check(device + ': submission activates before reservation without invented stage progress', async() => {
@@ -106,13 +113,14 @@ async function main() {
         await send(); await waitStats(value => value.reservation_pending);
         try {
           assert.equal(await timeline.getAttribute('data-state'), 'preparing');
-          assert.equal(await timeline.locator('button[data-tone="gray"]').count(), 8);
+          assert.equal(await timeline.locator('button[data-trace-node][data-tone="gray"]').count(), 8);
           assert.equal((await stats()).calls, before);
         } finally { await page.request.post(ready.url + '/test/reserve-release'); }
       });
 
       await check(device + ': real Ollama SSE activates blue processing with elapsed time', async() => {
         await page.waitForFunction(() => document.querySelector('[data-trace-node="ollama"]').dataset.tone === 'blue');
+        await openPipeline();
         activeId = (await snapshot()).trace_id;
         assert.match(activeId,/^[a-f0-9]{32}$/);
         assert.equal(await page.evaluate(() => state.pending.has(9)), true);
@@ -293,12 +301,12 @@ async function main() {
           if(scroll)scroll.scrollLeft=scroll.scrollWidth;
           const workspace=document.querySelector('.lab-workspace').getBoundingClientRect();
           const trace=element.getBoundingClientRect();
-          return {overflow:document.documentElement.scrollWidth>innerWidth+1,below:trace.top>=workspace.bottom-1,
+          return {overflow:document.documentElement.scrollWidth>innerWidth+1,right:trace.left>=workspace.right-1||innerWidth<=760,aligned:Math.abs(trace.top-workspace.top)<1,
             scrollable:Boolean(scroll),scrolled:scroll?.scrollLeft>0,
             animations:element.getAnimations({subtree:true}).filter(animation=>animation.playState==='running').length};
         });
-        assert(!layout.overflow&&layout.below);
-        if(device==='mobile')assert(layout.scrollable&&layout.scrolled);
+        assert(!layout.overflow&&layout.right&&layout.aligned);
+        assert(!layout.scrollable,'the vertical pipeline must not need horizontal scrolling');
         if(reducedMotion)assert.equal(layout.animations,0);
         assert.deepEqual(errors,[]);
       });
