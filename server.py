@@ -1371,6 +1371,22 @@ class Store:
             db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
         return data
 
+    def reset_lab(self, sid, lab_id):
+        """Explicitly revoke this lab's award and start a fresh attempt atomically."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
+            if not row:
+                raise APIError(409, "This student session is no longer available.")
+            data = json.loads(row[0])
+            current = data["labs"][str(lab_id)]
+            replacement = fresh_lab(current["attempt"] + 1, current.get("defense_level", 0), lab_id=lab_id)
+            if lab_id == 1:
+                replacement["operational_alerts"] = fresh_operational_alerts()
+            data["labs"][str(lab_id)] = replacement
+            db.execute("UPDATE sessions SET data=?, updated=? WHERE sid=?", (json.dumps(data), time.time(), sid))
+        return data
+
     def save(self, sid, data, *, lab2_turn=None):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -1379,6 +1395,11 @@ class Store:
                 previous = json.loads(latest[0])
                 if lab2_turn is not None and previous["labs"]["2"]["attempt"] != data["labs"]["2"]["attempt"]:
                     raise APIError(409, "This lab was restarted while the AI was replying. The old reply was discarded.")
+                # An unrelated save must not restore a lab that was restarted.
+                for key, saved in previous["labs"].items():
+                    current = data["labs"].get(key)
+                    if current is not None and current["attempt"] < saved["attempt"]:
+                        data["labs"][key] = copy.deepcopy(saved)
                 self._merge_lab2_award(data, previous)
                 self._merge_lab3_award(data, previous)
                 self._merge_lab4_award(data, previous)
@@ -1824,6 +1845,8 @@ class Application:
                 "kb_revision": record["kb_revision"], "synced_revision": record["synced_revision"],
                 "use_kb": record["use_kb"], "last_result": record["last_result"],
                 "defense_level": record.get("defense_level", 0)}
+        if lab_id == 7:
+            public["attempt"] = record["attempt"]
         if lab_id == 9:
             verified = _lab9_current(sid, record)
             refusals = len(_lab9_history(record, sid) or [])
@@ -2706,17 +2729,7 @@ class Application:
 
     def reset(self, sid, lab_id):
         with self.session_lock(sid):
-            _, data = self.store.get(sid)
-            current = data["labs"][str(lab_id)]
-            data["labs"][str(lab_id)] = fresh_lab(current["attempt"] + 1, current.get("defense_level", 0), lab_id=lab_id)
-            if lab_id == 1:
-                data["labs"]["1"]["operational_alerts"] = fresh_operational_alerts()
-            if lab_id == 8:
-                data = self.store.save_lab8(sid, data["labs"]["8"], current)
-            elif lab_id == 9:
-                data = self.store.save_lab9(sid, data["labs"]["9"], current)
-            else:
-                self.store.save(sid, data)
+            data = self.store.reset_lab(sid, lab_id)
             return self.lab_result(sid, lab_id, data)
 
 

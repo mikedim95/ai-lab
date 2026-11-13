@@ -400,12 +400,11 @@ class Lab6EvidenceTests(unittest.TestCase):
         self.assertFalse(self.receipts()[-1]["verification_outcome"])
         self.assertEqual(self.app.public_lab(self.sid, 6, self.record())["flag"], flag)
 
-    def test_completion_and_original_flag_survive_reset_difficulty_and_failed_generation(self):
+    def test_completion_and_original_flag_survive_difficulty_and_failed_generation(self):
         result = self.ask()
         flag = result["lab"]["flag"]
         self.app.submit_flag(self.sid, 6, {"flag": flag})
-        for result in [self.app.reset(self.sid, 6),
-                       self.app.update_defense(self.sid, 6, {"level": 1})]:
+        for result in [self.app.update_defense(self.sid, 6, {"level": 1})]:
             self.assertTrue(result["lab"]["completed"])
             self.assertEqual(result["summary"]["score"], 200)
             self.assertEqual(result["lab"]["flag"], flag)
@@ -430,7 +429,8 @@ class Lab6EvidenceTests(unittest.TestCase):
     def test_transaction_preserves_completion_and_flag_origin_from_latest_row(self):
         flag = self.ask()["lab"]["flag"]
         self.app.submit_flag(self.sid, 6, {"flag": flag})
-        self.app.reset(self.sid, 6)
+        self.app.update_defense(self.sid, 6, {"level": 1})
+        self.app.update_defense(self.sid, 6, {"level": 0})
         commit = self.app.store.save_lab6_turn
         def lost_origin(sid, record, receipt, **kwargs):
             record = copy.deepcopy(record)

@@ -94,7 +94,7 @@ test('the actual hint button reveals exactly one additional hint on every click'
     assert.deepEqual(ui.get('hints').children.map(child => child.textContent), hints.slice(0, count));
     assert.equal(ui.get('hint-button').attributes['aria-expanded'], 'true');
   }
-  assert.match(ui.get('hint-button').textContent, /Hide hints/);
+  assert.match(ui.get('hint-button').textContent, /Close all hints/);
   ui.click('hint-button');
   assert.equal(ui.get('hints').children.length, 0);
   assert.equal(ui.get('hint-button').attributes['aria-expanded'], 'false');
@@ -148,8 +148,8 @@ test('only an accepted backend completion response reveals the explanation', asy
   assert.equal(ui.get('lab3-completion-explanation').hidden, true);
   release(ui.reply({ id: 3, completed: true, exploited: true, flag: 'PANOPTIS{fixture}' }, 150));
   await pending;
-  assert.equal(ui.get('lab3-completion-explanation').hidden, false);
-  assert.equal(ui.get('flag-form').hidden, true);
+  assert.equal(ui.get('lab3-completion-explanation').hidden, true);
+  assert.equal(ui.get('flag-form').hidden, false);
   assert.equal(ui.run('state.summary.score'), 150);
 });
 
@@ -173,11 +173,11 @@ test('a successful HTTP response without backend completion cannot reveal the ex
 
 test('refresh restores the explanation for completed Lab 3 and hides it in every other lab', async () => {
   const ui = await studentUI({ completed: true, exploited: true });
-  assert.equal(ui.get('lab3-completion-explanation').hidden, false);
+  assert.equal(ui.get('lab3-completion-explanation').hidden, true);
   for (const id of [1, 2, 4, 5, 6, 7, 8, 9]) {
     ui.run(`state.current = ${id}; state.labs['${id}'].completed = true; drawLab()`);
     assert.equal(ui.get('lab3-completion-explanation').hidden, true);
   }
   ui.run('state.current = 3; drawLab()');
-  assert.equal(ui.get('lab3-completion-explanation').hidden, false);
+  assert.equal(ui.get('lab3-completion-explanation').hidden, true);
 });

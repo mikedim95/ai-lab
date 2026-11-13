@@ -60,6 +60,13 @@ class Lab4CompletionTests(unittest.TestCase):
         self.assertEqual(result["summary"]["score"], 100)
         self.assertEqual(result["summary"]["completed"], [4])
 
+    def assert_reset(self, result):
+        self.assertFalse(result["lab"]["completed"])
+        self.assertFalse(result["lab"]["exploited"])
+        self.assertIsNone(result["lab"]["flag"])
+        self.assertEqual(result["summary"]["score"], 0)
+        self.assertEqual(result["summary"]["completed"], [])
+
     def assert_no_current_verification(self, result):
         self.assertFalse(result["lab"]["exploited"])
         self.assertIsNone(result["lab"]["last_result"])
@@ -148,15 +155,16 @@ class Lab4CompletionTests(unittest.TestCase):
         self.assertEqual(sum(item["flag_submission"]["points_awarded"] for item in successes), 100)
         self.assert_retained(self.public(), flag)
 
-    def test_new_conversation_keeps_earned_completion_and_resets_current_verification(self):
+    def test_restart_revokes_completion_flag_and_points(self):
         first = self.complete()
         result = self.app.reset(self.sid, 4)
-        self.assert_retained(result, first["lab"]["flag"])
+        self.assert_reset(result)
         self.assert_no_current_verification(result)
         self.assertGreater(result["lab"]["attempt"], first["lab"]["attempt"])
         self.assertEqual(result["lab"]["documents"], [])
-        repeated = self.app.submit_flag(self.sid, 4, {"flag": first["lab"]["flag"]})
-        self.assertEqual(repeated["flag_submission"], {"newly_completed": False, "points_awarded": 0})
+        with self.assertRaises(server.APIError) as error:
+            self.app.submit_flag(self.sid, 4, {"flag": first["lab"]["flag"]})
+        self.assertEqual(error.exception.status, 403)
 
     def test_all_difficulty_changes_keep_completion_original_flag_and_documents(self):
         first = self.complete()
@@ -186,7 +194,8 @@ class Lab4CompletionTests(unittest.TestCase):
 
     def test_fresh_unqualified_response_does_not_revoke_previous_completion_or_claim_current_success(self):
         first = self.complete()
-        self.app.reset(self.sid, 4)
+        self.app.update_defense(self.sid, 4, {"level": 1})
+        self.app.update_defense(self.sid, 4, {"level": 0})
         result = self.ask("I can explain boiler monitoring.")
         self.assert_retained(result, first["lab"]["flag"])
         self.assertFalse(result["lab"]["exploited"])
@@ -194,14 +203,21 @@ class Lab4CompletionTests(unittest.TestCase):
         self.assertNotIn("Exploit verified.", result["lab"]["last_result"]["message"])
         self.assertFalse(self.record()["lab4_verification_receipts"][-1]["verification_outcome"])
 
-    def test_new_verified_attempt_keeps_earned_flag_and_cannot_reaward_points(self):
+    def test_restart_allows_a_new_flag_to_earn_points_once(self):
         first = self.complete()
         self.app.reset(self.sid, 4)
         captured = self.unlock()
-        self.assert_retained(captured, first["lab"]["flag"])
+        self.assertFalse(captured["lab"]["completed"])
         self.assertTrue(captured["lab"]["exploited"])
-        self.assertTrue(captured["lab"]["last_result"]["triggered"])
-        repeated = self.app.submit_flag(self.sid, 4, {"flag": first["lab"]["flag"]})
+        self.assertEqual(captured["summary"]["score"], 0)
+        self.assertNotEqual(captured["lab"]["flag"], first["lab"]["flag"])
+        with self.assertRaises(server.APIError) as error:
+            self.app.submit_flag(self.sid, 4, {"flag": first["lab"]["flag"]})
+        self.assertEqual(error.exception.status, 400)
+        earned = self.app.submit_flag(self.sid, 4, {"flag": captured["lab"]["flag"]})
+        self.assert_retained(earned, captured["lab"]["flag"])
+        self.assertEqual(earned["flag_submission"]["points_awarded"], catalog.CATALOG[3]["points"])
+        repeated = self.app.submit_flag(self.sid, 4, {"flag": captured["lab"]["flag"]})
         self.assertEqual(repeated["flag_submission"]["points_awarded"], 0)
 
     def test_http_refresh_and_lab_switches_preserve_completion(self):
@@ -227,7 +243,6 @@ class Lab4CompletionTests(unittest.TestCase):
 
     def test_completion_and_flag_survive_reopening_in_a_new_backend_process(self):
         first = self.complete()
-        self.app.reset(self.sid, 4)
         code = """import json,sys
 from pathlib import Path
 import server
@@ -266,7 +281,6 @@ print(json.dumps(app.submit_flag(body['sid'],4,{'flag':body['flag']})))
             db.execute("UPDATE sessions SET data=? WHERE sid=?", (json.dumps(data), self.sid))
         reopened = server.Application(self.directory)
         self.assert_retained(self.public(reopened), expected)
-        self.assert_retained(reopened.reset(self.sid, 4), expected)
         self.assert_retained(reopened.update_defense(self.sid, 4, {"level": 2}), expected)
         repeated = reopened.submit_flag(self.sid, 4, {"flag": expected})
         self.assertEqual(repeated["flag_submission"]["points_awarded"], 0)
@@ -301,7 +315,7 @@ print(json.dumps(app.submit_flag(body['sid'],4,{'flag':body['flag']})))
         self.app.store.save(self.sid, stale)
         self.assertEqual(self.record()["attempt"], 2)
         self.assert_no_current_verification(self.public())
-        self.assert_retained(self.public(), first["lab"]["flag"])
+        self.assert_reset(self.public())
 
     def test_flag_submission_transaction_preserves_other_labs_completed_concurrently(self):
         captured = self.unlock()
@@ -328,7 +342,7 @@ print(json.dumps(app.submit_flag(body['sid'],4,{'flag':body['flag']})))
         self.app.update_defense(self.sid, 4, {"level": 1})
         after = server.Application(self.directory).store.get(self.sid)[1]
         self.assertEqual({key: value for key, value in after["labs"].items() if key != "4"}, before)
-        self.assertEqual(self.app.summary(after)["score"], 2100)
+        self.assertEqual(self.app.summary(after)["score"], 2100 - catalog.CATALOG[3]["points"])
 
     def test_completion_writes_do_not_change_receipts_schema_or_flag_key(self):
         captured = self.unlock()

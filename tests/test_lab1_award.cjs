@@ -37,9 +37,9 @@ function studentUI(lab = 1, completed = true) {
 test('previously completed Lab 1 keeps its earned flag and existing submission available', () => {
   const ui = studentUI();
   assert.equal(ui.get('flag-button').textContent, '✓ Completed');
-  assert.equal(ui.get('captured-panel').hidden, false);
-  assert.equal(ui.get('captured-flag').textContent, 'PANOPTIS{real-flag}');
-  assert.equal(ui.get('use-captured-flag').hidden, false);
+  assert.equal(ui.get('captured-panel').hidden, true);
+  assert.equal(ui.get('captured-flag').textContent, '');
+  assert.equal(ui.get('use-captured-flag').hidden, true);
   assert.equal(ui.get('flag-form').hidden, false);
   assert.equal(ui.get('award-points').hidden, true);
 });
@@ -50,8 +50,8 @@ test('fresh verified capture opens the flag popup without awarding points', () =
     flag: 'PANOPTIS{verified-flag}', boiler_version: [1, 2] }, summary: { score: 0, completed: [] } };
   ui.run('acceptResponse(1, response)');
   assert.equal(ui.opened(), 1);
-  assert.equal(ui.get('flag-heading').textContent, 'You found the flag.');
-  assert.equal(ui.get('captured-flag').textContent, 'PANOPTIS{verified-flag}');
+  assert.equal(ui.get('flag-heading').textContent, 'Submit a flag');
+  assert.equal(ui.get('captured-flag').textContent, '');
   assert.equal(ui.run('state.summary.score'), 0);
 });
 
@@ -72,12 +72,12 @@ test('normal flag resubmission reports acceptance without claiming another point
   assert.equal(ui.get('flag-form').hidden, false);
 });
 
-test('completed flags in every other lab retain their existing display behavior', () => {
+test('completed labs show an empty submission form without a second points offer', () => {
   for (let id = 2; id <= 9; id += 1) {
     const ui = studentUI(id);
-    assert.equal(ui.get('captured-panel').hidden, false);
-    assert.equal(ui.get('flag-form').hidden, true);
+    assert.equal(ui.get('captured-panel').hidden, true);
+    assert.equal(ui.get('flag-form').hidden, false);
     assert.equal(ui.get('use-captured-flag').hidden, true);
-    assert.equal(ui.get('award-points').hidden, false);
+    assert.equal(ui.get('award-points').hidden, true);
   }
 });

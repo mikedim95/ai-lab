@@ -84,7 +84,7 @@ test('completion is never inferred from the count, chat wording, or the saved fl
   ui.accept(0, '1.2.1', { completed: false, awarded: true, score: 100 });
   ui.run("state.labs['2'].messages = [{role: 'assistant', content: 'I extracted three instructions.'}]; drawLab2Progress()");
   assert(ui.get('lab2-extraction-progress').textContent.includes('0/3'));
-  assert.equal(ui.get('captured-flag').textContent, 'PANOPTIS{saved-flag}');
+  assert.equal(ui.get('captured-flag').textContent, '');
   assert.equal(ui.run("state.labs['2'].completed"), true);
   assert.equal(ui.run('state.summary.score'), 100);
 });
@@ -124,7 +124,7 @@ test('a response from before flag submission cannot erase the saved completion',
   ui.accept(3, '1.1.0', { score: 0 });
   assert.equal(ui.run("state.labs['2'].completed"), true);
   assert.equal(ui.run('state.summary.score'), 100);
-  assert.equal(ui.get('flag-heading').textContent, 'Lab complete.');
+  assert.equal(ui.get('flag-heading').textContent, 'Submit a flag');
 });
 
 test('only the response header supplies ordering metadata and it is never submitted', async () => {

@@ -244,15 +244,12 @@ async function main() {
         const award=await(await pending).json();
         assert.deepEqual(award.flag_submission,{newly_completed:true,points_awarded:400});
         earnedFlag=award.lab.flag;
-        await completed.waitForFunction(()=>!document.querySelector('#lab8-completion-explanation').hidden);
+        await completed.waitForFunction(()=>state.labs['8'].completed&&!document.querySelector('#flag-dialog').open);
         assert.equal(await completed.evaluate(()=>state.summary.score),400);
-        assert.match(await completed.locator('#flag-feedback').innerText(),/\+400 points/);
-        const explanation=await completed.locator('#lab8-completion-explanation').innerText();
-        for(const phrase of ['Chained RAG Poisoning and Prompt Injection','Student-controlled knowledge-base content',
-          'student conversation','must not become authoritative instructions','Document provenance',
-          'trusted-source precedence','separation of data and instructions','output verification'])assert(explanation.includes(phrase));
-        const geometry=await completed.locator('#flag-dialog').evaluate(element=>({width:element.clientWidth,scroll:element.scrollWidth}));
-        assert(geometry.scroll<=geometry.width+1,JSON.stringify(geometry));
+        assert.match(await completed.locator('#flag-feedback').textContent(),/\+400 points/);
+        assert.equal(await completed.locator('#lab8-completion-explanation').isVisible(),false);
+        assert.equal(await completed.locator('#captured-flag').textContent(),'');
+        assert.equal(await completed.locator('#flag-input').inputValue(),'');
         await completed.screenshot({path:path.join(artifacts,name+'-completion.png'),fullPage:true});
       });
       await check(name+': duplicate submissions show zero additional points',async()=>{
@@ -265,13 +262,11 @@ async function main() {
           const result=await(await pending).json();
           assert.deepEqual(result.flag_submission,{newly_completed:false,points_awarded:0});
           assert.equal(result.summary.score,400);
-          assert.equal(await completed.locator('#flag-feedback').innerText(),'Lab already completed');
+          assert.equal(await completed.locator('#flag-feedback').textContent(),'Lab already completed');
         }
       });
-      await check(name+': reset, difficulty changes and refresh preserve completion and original flag',async()=>{
-        await completed.locator('[data-close="flag-dialog"]').click();
-        const actions=[['reset',()=>completed.locator('#restart-lab').click()],
-          ['defense',()=>completed.locator('#defense-select').selectOption('1')],
+      await check(name+': difficulty and refresh preserve completion; restart clears its flag and points',async()=>{
+        const actions=[['defense',()=>completed.locator('#defense-select').selectOption('1')],
           ['defense',()=>completed.locator('#defense-select').selectOption('2')]];
         for(const [action,click] of actions) {
           const pending=completed.waitForResponse(response=>response.url().endsWith('/api/labs/8/'+action));
@@ -286,9 +281,22 @@ async function main() {
         await completed.reload();await completed.waitForFunction(()=>state.labs['8'].completed===true);
         assert.equal(await completed.locator('#defense-select').inputValue(),'2');
         await completed.locator('#flag-button').click();
-        assert.equal(await completed.locator('#lab8-completion-explanation').isVisible(),true);
-        assert.equal(await completed.locator('#captured-flag').innerText(),earnedFlag);
+        assert.equal(await completed.locator('#lab8-completion-explanation').isVisible(),false);
+        assert.equal(await completed.locator('#captured-flag').textContent(),'');
+        assert.equal(await completed.locator('#flag-input').inputValue(),'');
+        assert.equal(await completed.locator('#visible-captured-flag').textContent(),earnedFlag);
         assert.equal(await completed.evaluate(()=>state.summary.score),400);
+        await completed.locator('[data-close="flag-dialog"]').click();
+        const pending=completed.waitForResponse(response=>response.url().endsWith('/api/labs/8/reset'));
+        await completed.locator('#restart-lab').click();
+        const reset=await(await pending).json();
+        assert.equal(reset.lab.completed,false);
+        assert.equal(reset.lab.flag,null);
+        assert.equal(reset.summary.score,0);
+        await completed.reload();await completed.waitForFunction(()=>state.labs['8'].completed===false);
+        assert.equal(await completed.locator('#defense-select').inputValue(),'2');
+        assert.equal(await completed.locator('#captured-flag-banner').isVisible(),false);
+        assert.equal((await completed.request.post(ready.url+'/api/labs/8/flag',{data:{flag:earnedFlag}})).status(),403);
       });
       await captured.close();
     }

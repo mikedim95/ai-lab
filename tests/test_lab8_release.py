@@ -388,11 +388,10 @@ class Lab8ReleaseTests(unittest.TestCase):
             self.assertIn(error.exception.status, (400, 403))
         self.assertEqual(self.app.summary(self.app.store.get(self.sid)[1])["score"], 400)
 
-    def test_completion_flag_and_award_evidence_survive_reset_difficulty_and_reopen(self):
+    def test_completion_flag_and_award_evidence_survive_difficulty_and_reopen(self):
         first = self.earn()
         flag, award = first["lab"]["flag"], self.record()["lab8_award_receipt"]
-        for operation in (lambda: self.app.reset(self.sid, 8),
-                          lambda: self.app.update_defense(self.sid, 8, {"level": 1}),
+        for operation in (lambda: self.app.update_defense(self.sid, 8, {"level": 1}),
                           lambda: self.app.update_defense(self.sid, 8, {"level": 2})):
             response = operation()
             self.assertTrue(response["lab"]["completed"])
@@ -405,10 +404,14 @@ class Lab8ReleaseTests(unittest.TestCase):
         reopened = server.Application(self.directory)
         self.assertEqual(reopened.refresh_state(self.sid)["labs"]["8"]["flag"], flag)
         self.assertTrue(reopened.refresh_state(self.sid)["labs"]["8"]["completed"])
+        reset = reopened.reset(self.sid, 8)
+        self.assertFalse(reset["lab"]["completed"])
+        self.assertIsNone(reset["lab"]["flag"])
+        self.assertEqual(reset["summary"]["score"], 0)
+        self.assertNotIn("lab8_award_receipt", self.record())
 
     def test_award_survives_a_new_backend_process(self):
         first = self.earn()
-        self.app.reset(self.sid, 8)
         code = """import json,sys
 from pathlib import Path
 import server
@@ -443,8 +446,8 @@ print(json.dumps({'completed':state['labs']['8']['completed'],'flag':state['labs
         expected = self.app.store.flag(self.sid, 8, legacy["attempt"])
         self.assertTrue(self.app.refresh_state(self.sid)["labs"]["8"]["completed"])
         reset = self.app.reset(self.sid, 8)
-        self.assertTrue(reset["lab"]["completed"])
-        self.assertEqual(reset["lab"]["flag"], expected)
+        self.assertFalse(reset["lab"]["completed"])
+        self.assertIsNone(reset["lab"]["flag"])
 
     def test_stale_session_missing_lab8_cannot_remove_earned_completion(self):
         _, stale = self.app.store.get(self.sid)

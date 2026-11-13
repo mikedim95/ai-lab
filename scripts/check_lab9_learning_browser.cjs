@@ -86,6 +86,10 @@ with tempfile.TemporaryDirectory() as directory:
           saved.labs['9'] = {...record,state_version:[record.state_version[0]+1,0],
             exploited:false,guardrail_status:'normal',messages:[],last_result:null,
             defense_level:pathname.endsWith('/defense')?request.postDataJSON().level:record.defense_level};
+          if(pathname.endsWith('/reset')){
+            saved.labs['9'].completed=false;saved.labs['9'].flag=null;
+            saved.summary={...saved.summary,score:0,completed:[]};
+          }
           return route.fulfill({json:{lab:saved.labs['9'],summary:saved.summary}});
         }
         unexpected.push(request.method() + ' ' + pathname);
@@ -99,7 +103,9 @@ with tempfile.TemporaryDirectory() as directory:
       const openFlag = async() => {
         if (!(await page.locator('#flag-dialog').evaluate(dialog=>dialog.open))) await page.locator('#flag-button').click();
       };
-      const closeFlag = () => page.locator('[data-close="flag-dialog"]').click();
+      const closeFlag = async() => {
+        if(await page.locator('#flag-dialog').evaluate(dialog=>dialog.open))await page.locator('[data-close="flag-dialog"]').click();
+      };
       await check(name + ': fresh conversation hides learning', async() => {
         await openFlag(); assert.equal(await explanation.isVisible(), false);
       });
@@ -116,7 +122,7 @@ with tempfile.TemporaryDirectory() as directory:
         assert.match(await page.locator('#flag-feedback').textContent(), /does not match/);
         assert.equal(await explanation.isVisible(), false);
       });
-      await check(name + ': successful submission reveals learning only after acknowledgement', async() => {
+      await check(name + ': successful submission closes only after backend acknowledgement', async() => {
         await page.locator('#flag-input').fill(flag);
         await page.locator('#submit-flag').click();
         await flagReceived;
@@ -125,28 +131,36 @@ with tempfile.TemporaryDirectory() as directory:
         assert.equal(typeof releaseFlag, 'function');
         releaseFlag();
         await page.waitForFunction(()=>state.labs['9'].completed === true);
-        assert.equal(await explanation.isVisible(), true);
+        assert.equal(await page.locator('#flag-dialog').evaluate(dialog=>dialog.open),false);
+        assert.equal(await explanation.isVisible(), false);
+        assert.equal(await page.evaluate(()=>state.summary.score),500);
         assert.deepEqual((await explanation.locator('p').allTextContents()).map(text=>text.trim()), paragraphs);
         assert.deepEqual((await explanation.locator('li').allTextContents()).map(text=>text.trim()), defenses);
       });
-      await check(name + ': existing dialog design remains readable and scrollable', async() => {
+      await check(name + ': submission shows a readable blank input without repeating the flag', async() => {
+        await openFlag();
         const dialog = page.locator('#flag-dialog');
         assert.equal(await dialog.evaluate(element=>element.scrollWidth <= element.clientWidth), true);
-        const typography = await explanation.evaluate(element=>({font:parseFloat(getComputedStyle(element).fontSize),line:parseFloat(getComputedStyle(element).lineHeight)}));
+        const typography = await page.locator('#flag-input').evaluate(element=>({font:parseFloat(getComputedStyle(element).fontSize),line:parseFloat(getComputedStyle(element).lineHeight)}));
         assert(typography.font >= 13 && typography.line >= typography.font * 1.4);
-        for (const item of await explanation.locator('p, li').all()) {
+        assert.equal(await page.locator('#flag-input').inputValue(),'');
+        assert.equal(await page.locator('#captured-panel').isVisible(),false);
+        assert(!(await dialog.innerText()).includes(flag));
+        for (const item of [page.locator('#flag-input'),page.locator('#submit-flag')]) {
           await item.scrollIntoViewIfNeeded();
           const box = await item.boundingBox(), bounds = await dialog.boundingBox();
           assert(box && box.width > 0 && box.x >= bounds.x && box.x + box.width <= bounds.x + bounds.width);
           assert(box.y >= 0 && box.y + box.height <= viewport.height);
         }
-        await dialog.screenshot({path:path.join(artifacts,name + '-learning.png')});
+        await dialog.screenshot({path:path.join(artifacts,name + '-flag-input.png')});
       });
-      await check(name + ': refresh restores saved learning without resubmitting', async() => {
+      await check(name + ': refresh retains completion and leaves submission input blank', async() => {
         await page.reload({waitUntil:'networkidle'});
         await openFlag();
-        assert.equal(await explanation.isVisible(), true);
-        assert.equal(await page.locator('#flag-form').isVisible(), false);
+        assert.equal(await explanation.isVisible(), false);
+        assert.equal(await page.locator('#flag-form').isVisible(), true);
+        assert.equal(await page.locator('#flag-input').inputValue(),'');
+        assert.equal(await page.evaluate(()=>state.summary.score),500);
         assert.deepEqual((await explanation.locator('li').allTextContents()).map(text=>text.trim()), defenses);
       });
       await check(name + ': duplicate submission does not report another award', async() => {
@@ -155,26 +169,28 @@ with tempfile.TemporaryDirectory() as directory:
         assert.equal(await page.locator('#flag-feedback').textContent(),'Lab already completed');
         assert.equal(await page.evaluate(()=>state.summary.score),500);
       });
-      await check(name + ': new chat preserves earned flag and learning with normal progress', async() => {
+      await check(name + ': restart clears earned flag and points with normal progress', async() => {
         await closeFlag();
         await page.locator('#restart-lab').click();
         await page.waitForFunction(()=>state.labs['9'].state_version[0]===2);
         assert.equal(await page.locator('#lab9-progress-status').textContent(),'Normal conversation.');
         await openFlag();
-        assert.equal(await explanation.isVisible(),true);
-        assert.equal(await page.locator('#captured-flag').textContent(),flag);
-        assert.equal(await page.locator('#captured-panel').isVisible(),true);
-        assert.equal(await page.evaluate(()=>state.summary.score),500);
+        assert.equal(await explanation.isVisible(),false);
+        assert.equal(await page.locator('#captured-flag').textContent(),'');
+        assert.equal(await page.locator('#captured-panel').isVisible(),false);
+        assert.equal(await page.locator('#flag-input').inputValue(),'');
+        assert.equal(await page.locator('#captured-flag-banner').isVisible(),false);
+        assert.equal(await page.evaluate(()=>state.summary.score),0);
       });
-      await check(name + ': difficulty change preserves the earned flag and clears current verification', async() => {
+      await check(name + ': difficulty change does not restore a revoked award', async() => {
         await closeFlag();
         await page.locator('#defense-select').selectOption('1');
         await page.waitForFunction(()=>state.labs['9'].state_version[0]===3);
         assert.equal(await page.locator('#lab9-progress-status').textContent(),'Normal conversation.');
         await openFlag();
-        assert.equal(await explanation.isVisible(),true);
-        assert.equal(await page.locator('#captured-flag').textContent(),flag);
-        assert.equal(await page.evaluate(()=>state.summary.score),500);
+        assert.equal(await explanation.isVisible(),false);
+        assert.equal(await page.locator('#captured-flag').textContent(),'');
+        assert.equal(await page.evaluate(()=>state.summary.score),0);
       });
       await check(name + ': another lab never displays Lab 9 learning', async() => {
         await closeFlag();

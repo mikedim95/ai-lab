@@ -63,6 +63,13 @@ class Lab2CompletionTests(unittest.TestCase):
         self.assertEqual(result["summary"]["score"], self.points if completed else 0)
         self.assertEqual(result["summary"]["completed"], [2] if completed else [])
 
+    def assert_reset(self, result):
+        self.assertFalse(result["lab"]["completed"])
+        self.assertFalse(result["lab"]["exploited"])
+        self.assertIsNone(result["lab"]["flag"])
+        self.assertEqual(result["summary"]["score"], 0)
+        self.assertEqual(result["summary"]["completed"], [])
+
     @staticmethod
     def incorrect(flag):
         return flag[:-2] + ("0" if flag[-2] != "0" else "1") + "}"
@@ -204,28 +211,29 @@ class Lab2CompletionTests(unittest.TestCase):
         self.assertEqual(sum(r["flag_submission"]["points_awarded"] for r in accepted), self.points)
         self.assert_retained(self.public(), flag)
 
-    def test_unsubmitted_verified_flag_survives_a_fresh_chat_and_remains_submittable(self):
+    def test_restart_invalidates_an_unsubmitted_verified_flag(self):
         flag = self.unlock()["lab"]["flag"]
         reset = self.app.reset(self.sid, 2)
+        self.assert_reset(reset)
         self.assertEqual(reset["lab"]["messages"], [])
         self.assertEqual(reset["lab"]["verified_instruction_count"], 0)
         self.assertFalse(reset["lab"]["extraction_completed"])
-        self.assert_retained(reset, flag, completed=False)
         self.assertNotEqual(self.app.store.flag(self.sid, 2, 2), flag)
-        accepted = self.app.submit_flag(self.sid, 2, {"flag": flag})
-        self.assert_retained(accepted, flag)
-        self.assertTrue(accepted["flag_submission"]["newly_completed"])
+        with self.assertRaises(server.APIError) as error:
+            self.app.submit_flag(self.sid, 2, {"flag": flag})
+        self.assertEqual(error.exception.status, 403)
 
-    def test_completed_chat_reset_preserves_flag_score_and_completion_but_resets_progress(self):
+    def test_repeated_restart_clears_flag_score_completion_and_extraction_progress(self):
         first = self.complete()
         for _ in range(3):
             reset = self.app.reset(self.sid, 2)
+            self.assert_reset(reset)
             self.assertEqual(reset["lab"]["messages"], [])
             self.assertEqual(reset["lab"]["verified_instruction_count"], 0)
             self.assertFalse(reset["lab"]["extraction_completed"])
-            self.assert_retained(reset, first["lab"]["flag"])
-        replay = self.app.submit_flag(self.sid, 2, {"flag": first["lab"]["flag"]})
-        self.assertEqual(replay["flag_submission"], {"newly_completed": False, "points_awarded": 0})
+        with self.assertRaises(server.APIError) as error:
+            self.app.submit_flag(self.sid, 2, {"flag": first["lab"]["flag"]})
+        self.assertEqual(error.exception.status, 403)
 
     def test_difficulty_changes_preserve_unsubmitted_flag_and_completed_award(self):
         flag = self.unlock()["lab"]["flag"]
@@ -252,18 +260,25 @@ class Lab2CompletionTests(unittest.TestCase):
         self.assert_retained(filtered, flag)
         self.assertEqual(filtered["lab"]["verified_instruction_count"], 0)
 
-    def test_later_verified_attempt_retains_first_capture_flag_and_cannot_reaward(self):
+    def test_restart_requires_a_new_capture_and_awards_it_only_once(self):
         first = self.complete()
         self.app.reset(self.sid, 2)
         later = self.unlock()
-        self.assert_retained(later, first["lab"]["flag"])
-        self.assertNotEqual(later["lab"]["flag"], self.app.store.flag(self.sid, 2, 2))
+        self.assertFalse(later["lab"]["completed"])
+        self.assertEqual(later["summary"]["score"], 0)
+        self.assertNotEqual(later["lab"]["flag"], first["lab"]["flag"])
+        self.assertEqual(later["lab"]["flag"], self.app.store.flag(self.sid, 2, 2))
+        with self.assertRaises(server.APIError) as error:
+            self.app.submit_flag(self.sid, 2, {"flag": first["lab"]["flag"]})
+        self.assertEqual(error.exception.status, 400)
+        earned = self.app.submit_flag(self.sid, 2, {"flag": later["lab"]["flag"]})
+        self.assert_retained(earned, later["lab"]["flag"])
+        self.assertEqual(earned["flag_submission"]["points_awarded"], self.points)
         repeated = self.app.submit_flag(self.sid, 2, {"flag": later["lab"]["flag"]})
-        self.assertEqual(repeated["flag_submission"], {"newly_completed": False, "points_awarded": 0})
+        self.assertEqual(repeated["flag_submission"]["points_awarded"], 0)
 
     def test_reopening_backend_preserves_completion_original_flag_and_idempotency(self):
         first = self.complete()
-        self.app.reset(self.sid, 2)
         reopened = server.Application(self.directory)
         self.assert_retained(self.public(reopened), first["lab"]["flag"])
         result = reopened.submit_flag(self.sid, 2, {"flag": first["lab"]["flag"]})
@@ -300,7 +315,7 @@ class Lab2CompletionTests(unittest.TestCase):
         _, saved = self.app.store.get(self.sid)
         self.assertEqual(saved["labs"]["2"]["attempt"], 2)
         result = self.public()
-        self.assert_retained(result, first["lab"]["flag"])
+        self.assert_reset(result)
         self.assertEqual(result["lab"]["messages"], [])
         self.assertEqual(result["lab"]["verified_instruction_count"], 0)
         self.assertEqual(result["lab"].extraction_version, reset["lab"].extraction_version)
@@ -382,7 +397,7 @@ class Lab2CompletionTests(unittest.TestCase):
         repeated = self.app.submit_flag(self.sid, 2, {"flag": flag})
         self.assertEqual(repeated["flag_submission"], {"newly_completed": False, "points_awarded": 0})
 
-    def test_legacy_completed_session_keeps_original_flag_after_reset_and_restart(self):
+    def test_legacy_completion_survives_backend_restart_until_explicit_lab_reset(self):
         _, legacy = self.app.store.get(self.sid)
         legacy["labs"]["2"].update(attempt=7, exploited=True, completed=True)
         legacy["labs"]["2"].pop("lab2_flag_attempt", None)
@@ -392,10 +407,11 @@ class Lab2CompletionTests(unittest.TestCase):
         reopened = server.Application(self.directory)
         self.assert_retained(self.public(reopened), original_flag)
         reset = reopened.reset(self.sid, 2)
-        self.assert_retained(reset, original_flag)
+        self.assert_reset(reset)
         self.assertEqual(reset["lab"]["verified_instruction_count"], 0)
-        repeated = reopened.submit_flag(self.sid, 2, {"flag": original_flag})
-        self.assertEqual(repeated["flag_submission"], {"newly_completed": False, "points_awarded": 0})
+        with self.assertRaises(server.APIError) as error:
+            reopened.submit_flag(self.sid, 2, {"flag": original_flag})
+        self.assertEqual(error.exception.status, 403)
 
     def test_lab2_completion_preserves_manually_submitted_lab1_award(self):
         replies = [
@@ -418,15 +434,15 @@ class Lab2CompletionTests(unittest.TestCase):
         expected = catalog.CATALOG[0]["points"] + self.points
         self.assertEqual(lab2["summary"]["score"], expected)
         reset = self.app.reset(self.sid, 2)
-        self.assertEqual(reset["summary"]["score"], expected)
+        self.assertEqual(reset["summary"]["score"], catalog.CATALOG[0]["points"])
         self.assertEqual(self.app.store.get(self.sid)[1]["labs"]["1"], lab1_before)
         repeat_lab1 = self.app.submit_flag(self.sid, 1, {"flag": lab1_flag})
-        self.assertEqual(repeat_lab1["summary"]["score"], expected)
+        self.assertEqual(repeat_lab1["summary"]["score"], catalog.CATALOG[0]["points"])
         self.assertNotIn("flag_submission", repeat_lab1)
         reset_lab1 = self.app.reset(self.sid, 1)
         self.assertFalse(reset_lab1["lab"]["completed"])
         self.assertIsNone(reset_lab1["lab"]["flag"])
-        self.assertEqual(reset_lab1["summary"]["score"], self.points)
+        self.assertEqual(reset_lab1["summary"]["score"], 0)
 
 
 if __name__ == "__main__":

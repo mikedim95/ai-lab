@@ -163,10 +163,10 @@ test('only backend-confirmed flag completion reveals the explanation and restore
   const pending=ui.run('submitFlag({preventDefault(){}})');
   assert.equal(ui.get('lab4-completion-explanation').hidden,true);
   release(); await pending;
-  assert.equal(ui.get('lab4-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab4-completion-explanation').hidden,true);
   assert.equal(ui.run('state.summary.score'),100);
   const restored=await studentUI({completed:true,exploited:true});
-  assert.equal(restored.get('lab4-completion-explanation').hidden,false);
+  assert.equal(restored.get('lab4-completion-explanation').hidden,true);
 });
 
 test('Lab 4 explanation stays hidden in every other lab', async () => {

@@ -115,9 +115,14 @@ async function main(){
       await check(label+': points arrive only after manual paste and Submit flag',async()=>{
         await page.locator('#flag-button').click();
         assert.equal(await page.locator('#flag-input').inputValue(),'');assert.equal(posts.length,0);
+        assert.equal(await page.locator('#captured-panel').isVisible(),false);
+        assert.equal(await page.locator('#captured-flag').textContent(),'');
+        assert(!(await page.locator('#flag-dialog').innerText()).includes(flag));
         await page.locator('#flag-input').fill(copied);
         await page.locator('#submit-flag').click();
         await page.waitForFunction(id=>state.labs[String(id)].completed===true,id);
+        assert.equal(await page.locator('#flag-dialog').evaluate(dialog=>dialog.open),false);
+        assert.equal(await page.locator('#flag-input').inputValue(),'');
         assert.equal(posts.length,1);
         assert.equal(await page.evaluate(()=>state.summary.score),saved.catalog[id-1].points);
         assert.equal(await page.locator('#visible-captured-flag').textContent(),flag);

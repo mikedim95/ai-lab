@@ -22,6 +22,10 @@ function traceContext(record) {
   return {attempt:record?.attempt ?? record?.state_version?.[0] ?? record?.boiler_version?.[0] ?? record?._extractionVersion?.[0] ?? null,
     difficulty:record?.defense_level || 0};
 }
+function olderAttempt(current, incoming) {
+  const before = traceContext(current).attempt, after = traceContext(incoming).attempt;
+  return Number.isSafeInteger(before) && Number.isSafeInteger(after) && after < before;
+}
 function traceUI(method, ...args) {
   try { return globalThis.TraceTimeline?.[method]?.(...args); }
   catch { return null; } // Optional visualization must remain independent of chat.
@@ -34,9 +38,10 @@ function routeId() { return Number(location.pathname.match(/^\/lab\/([1-9])\/?$/
 
 function staleLab3Response(current, incoming) {
   if (!current || !incoming) return false;
-  return (Number.isSafeInteger(current.attempt) && Number.isSafeInteger(incoming.attempt)
-      && incoming.attempt < current.attempt)
-    || (current.completed === true && incoming.completed !== true);
+  const versioned = Number.isSafeInteger(current.attempt) && Number.isSafeInteger(incoming.attempt);
+  return (versioned && incoming.attempt < current.attempt)
+    || (current.completed === true && incoming.completed !== true
+      && !(versioned && incoming.attempt > current.attempt));
 }
 
 function staleLab6Response(current, incoming) {
@@ -51,7 +56,8 @@ function staleLab8Response(current, incoming) {
     && value.every(part => Number.isSafeInteger(part) && part >= 0);
   const before = current?.state_version;
   const after = incoming?.state_version;
-  if (current?.completed === true && incoming?.completed !== true) return true;
+  if (current?.completed === true && incoming?.completed !== true
+      && !(valid(before) && valid(after) && after[0] > before[0])) return true;
   if (!valid(before)) return false;
   if (incoming?.id !== 8 || !valid(after)) return true;
   return after[0] < before[0] || (after[0] === before[0] && after[1] < before[1]);
@@ -103,9 +109,10 @@ function lab9Version(record) {
 }
 
 function staleLab9Response(current, incoming) {
-  if (current?.completed === true && incoming?.completed !== true) return true;
   const before = lab9Version(current);
   const after = lab9Version(incoming);
+  if (current?.completed === true && incoming?.completed !== true
+      && !(before && after && after[0] > before[0])) return true;
   if (!before) return false;
   return !after || after[0] < before[0] || (after[0] === before[0] && after[1] < before[1]);
 }
@@ -444,38 +451,49 @@ function drawHints() {
   const hints = metadata().hints;
   $('hints').replaceChildren();
   for (const hint of hints.slice(0, count)) $('hints').append(node('li', '', assistantBranding(hint)));
-  const label = count === 0 ? 'Reveal a hint' : count < hints.length ? 'Reveal another hint' : 'Hide hints';
-  $('hint-button').replaceChildren(document.createTextNode(label), node('span', '', count === hints.length ? '−' : '+'));
+  const label = count === 0 ? 'Reveal a hint' : count < hints.length ? 'Reveal another hint' : 'Close all hints';
+  $('hint-button').replaceChildren(document.createTextNode(label),
+    ...(count < hints.length ? [node('span', '', '+')] : []));
   $('hint-button').setAttribute('aria-expanded', String(count > 0));
   $('hint-button').setAttribute('aria-controls', 'hints');
+  $('solution-button').hidden = hints.length === 0 || count < hints.length;
+}
+
+function showSolution() {
+  const item = metadata();
+  if (!item.hints.length || (state.hintCounts.get(state.current) || 0) < item.hints.length) return;
+  $('solution-heading').textContent = `Lab ${item.id}: ${item.title} — Solution`;
+  $('solution-dialog').showModal();
 }
 
 function drawFlag() {
   const record = currentLab();
-  const hideSubmission = record.completed && state.current !== 1;
-  const captured = record.exploited || ([3, 4, 5, 6, 8, 9].includes(state.current) && record.completed === true && Boolean(record.flag));
   $('flag-button').textContent = record.completed ? '✓ Completed' : 'Submit flag';
   $('flag-button').className = `tool-button${record.exploited ? ' captured' : ''}`;
-  $('flag-heading').textContent = record.completed ? 'Lab complete.' : record.exploited ? 'You found the flag.' : 'Find it. Submit it.';
-  $('flag-instructions').textContent = record.completed ? `${metadata().points} points earned. You can keep experimenting or move to the next lab.` : record.exploited ? 'Paste the captured flag below and press Submit flag to earn the points.' : 'Trigger the exploit in chat to reveal this lab’s flag. Submit it here to earn the points.';
-  $('captured-panel').hidden = !captured;
-  $('captured-flag').textContent = record.flag || '';
+  $('flag-heading').textContent = 'Submit a flag';
+  $('flag-instructions').textContent = 'Paste your captured flag below.';
+  $('captured-panel').hidden = true;
+  $('captured-flag').textContent = '';
+  const captured = record.exploited || ([3, 4, 5, 6, 8, 9].includes(state.current) && record.completed === true && Boolean(record.flag));
   globalThis.FlagPresentation?.render(captured ? record.flag : null);
-  $('use-captured-flag').hidden = hideSubmission;
-  $('flag-form').hidden = hideSubmission;
+  $('use-captured-flag').hidden = true;
+  $('flag-form').hidden = false;
   $('flag-input').value = state.flagDrafts.get(state.current) || '';
   $('award-points').textContent = `+${metadata().points}`;
-  $('award-points').hidden = state.current === 1 && record.completed;
+  $('award-points').hidden = record.completed;
   const feedback = state.flagFeedback.get(state.current);
   $('flag-feedback').hidden = !feedback;
   $('flag-feedback').textContent = feedback?.message || '';
   $('flag-feedback').className = `flag-feedback${feedback?.error ? ' error-text' : ''}`;
-  $('lab3-completion-explanation').hidden = !(state.current === 3 && record.completed === true);
-  $('lab4-completion-explanation').hidden = !(state.current === 4 && record.completed === true);
-  $('lab5-completion-explanation').hidden = !(state.current === 5 && record.completed === true);
-  $('lab6-completion-explanation').hidden = !(state.current === 6 && record.completed === true);
-  $('lab8-completion-explanation').hidden = !(state.current === 8 && record.completed === true);
-  $('lab9-completion-explanation').hidden = !(state.current === 9 && record.completed === true);
+  for (const id of [3, 4, 5, 6, 8, 9]) $('lab' + id + '-completion-explanation').hidden = true;
+}
+
+function openFlagSubmission() {
+  state.flagDrafts.delete(state.current);
+  state.flagFeedback.delete(state.current);
+  drawFlag();
+  $('flag-dialog').showModal();
+  $('flag-input').focus();
 }
 
 function lab3DocumentStatus(id, record = state.labs['3'], draft = state.editors.get(3)) {
@@ -596,8 +614,8 @@ function updateControls() {
   $('composer-help').textContent = anyPending && !ownPending ? 'The AI is replying in another lab. You can still explore.' : 'Enter to send · Shift + Enter for a new line';
   $('restart-lab').disabled = ownPending || state.resetBusy.has(state.current) || changingDefense || (state.current === 1 && alertSaving);
   $('defense-select').disabled = ownPending || changingDefense || state.resetBusy.has(state.current) || (state.current === 1 && alertSaving);
-  $('flag-input').disabled = !record.exploited || state.flagBusy.has(state.current);
-  $('submit-flag').disabled = !record.exploited || state.flagBusy.has(state.current);
+  $('flag-input').disabled = state.flagBusy.has(state.current);
+  $('submit-flag').disabled = state.flagBusy.has(state.current);
   $('use-captured-flag').disabled = state.flagBusy.has(state.current);
   const kbBusy = state.kbBusy.has(state.current);
   const reviewBulletin = $('review-bulletin');
@@ -888,9 +906,7 @@ function drawLab() {
   $('chat-context').textContent = state.current === 1 ? 'Boiler monitoring assistant' : ['Vulnerable assistant', 'Hardened assistant', 'Guardrailed assistant'][record.defense_level || 0];
   $('lab-status').textContent = record.completed ? '✓ Completed' : record.exploited ? 'Flag captured' : record.messages.length ? 'In progress' : 'Ready to try';
   $('lab-status').className = `lab-status${record.completed ? ' complete' : record.exploited ? ' captured' : ''}`;
-  $('restart-lab').title = state.current === 3 || state.current === 4 || state.current === 5 || state.current === 8 || state.current === 9
-    ? 'Clear this lab’s chat and documents. Earned completion and points stay saved.'
-    : 'Clear this lab’s chat, documents, flag, and points';
+  $('restart-lab').title = 'Restart this lab and clear its chat, documents, flag, completion, and earned points';
   $('prompt').value = state.promptDrafts.get(state.current) || '';
   window.LabScenario?.render(state.current);
   drawLab2Progress();
@@ -914,6 +930,7 @@ function navigate(id, push = true) {
 }
 
 function acceptResponse(id, response) {
+  if (olderAttempt(state.labs[String(id)], response.lab)) return false;
   if (id === 2 && staleLab2Response(state.labs['2'], response.lab)) return false;
   if (id === 3 && staleLab3Response(state.labs['3'], response.lab)) return false;
   if (id === 4 && staleLab3Response(state.labs['4'], response.lab)) return false;
@@ -1026,6 +1043,7 @@ async function submitFlag(event) {
   state.flagBusy.add(id); updateControls();
   try {
     const response = await api(`/api/labs/${id}/flag`, { flag });
+    if (olderAttempt(state.labs[String(id)], response.lab)) return;
     if (id === 2 && staleLab2Response(state.labs['2'], response.lab)) return;
     if (id === 8 && staleLab8Response(state.labs['8'], response.lab)) return;
     if (id === 9 && staleLab9Response(state.labs['9'], response.lab)) return;
@@ -1091,7 +1109,12 @@ async function submitFlag(event) {
         ? 'Flag accepted. Lab 1 is complete; points were already awarded.'
         : `+${metadata(id).points} points. Well played.` });
     }
+    state.flagDrafts.delete(id);
     acceptResponse(id, response);
+    if (state.current === id && response.lab.completed === true && $('flag-dialog').open) {
+      $('flag-dialog').close();
+      $('flag-button').focus();
+    }
   } catch (error) {
     if (staleLab2Request(id, requestVersion)) return;
     if (id === 3 && (state.labs['3'].attempt !== requestLab3.attempt
@@ -1189,6 +1212,12 @@ async function checkHealth() {
 }
 
 function acceptInitialState(data) {
+  for (const [id, incoming] of Object.entries(data.labs)) {
+    if (olderAttempt(state.labs[id], incoming)) {
+      data.labs[id] = state.labs[id];
+      data.summary = state.summary;
+    }
+  }
   if (staleLab2Response(state.labs['2'], data.labs['2'])) {
     data.labs['2'] = state.labs['2'];
     data.summary = state.summary;
@@ -1225,9 +1254,10 @@ async function start() {
     $('flag-input').addEventListener('input', () => state.flagDrafts.set(state.current, $('flag-input').value));
     $('use-captured-flag').addEventListener('click', () => globalThis.FlagPresentation?.copyAndClose($('flag-dialog')));
     $('hint-button').addEventListener('click', () => { state.hintCounts.set(state.current, ((state.hintCounts.get(state.current) || 0) + 1) % (metadata().hints.length + 1)); drawHints(); });
+    $('solution-button').addEventListener('click', showSolution);
     $('restart-lab').addEventListener('click', restartLab);
     $('defense-select').addEventListener('change', changeDefense);
-    $('flag-button').addEventListener('click', () => $('flag-dialog').showModal());
+    $('flag-button').addEventListener('click', openFlagSubmission);
     $('knowledge-button').addEventListener('click', () => $('knowledge-dialog').showModal());
     for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', () => $(button.dataset.close).close());
     for (const dialog of document.querySelectorAll('.tool-dialog')) dialog.addEventListener('click', (event) => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close(); } });

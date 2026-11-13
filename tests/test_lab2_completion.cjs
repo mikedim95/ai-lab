@@ -72,9 +72,9 @@ test('a first authoritative Lab 2 award displays completion, existing points, an
   assert.equal(ui.run("state.labs['2'].completed"), true);
   assert.equal(ui.run('state.summary.score'), 100);
   assert.match(ui.run('state.flagFeedback.get(2).message'), /^\+100 points/);
-  assert.equal(ui.get('flag-heading').textContent, 'Lab complete.');
-  assert.equal(ui.get('captured-flag').textContent, 'test-captured-flag');
-  assert.equal(ui.get('flag-form').hidden, true);
+  assert.equal(ui.get('flag-heading').textContent, 'Submit a flag');
+  assert.equal(ui.get('captured-flag').textContent, '');
+  assert.equal(ui.get('flag-form').hidden, false);
 });
 
 test('a duplicate correct submission does not show another points award', async () => {
@@ -133,7 +133,7 @@ test('incorrect flag errors preserve an already earned Lab 2 completion and scor
   await submit(ui);
   assert.equal(ui.run("state.labs['2'].completed"), true);
   assert.equal(ui.run('state.summary.score'), 100);
-  assert.equal(ui.get('captured-flag').textContent, 'test-captured-flag');
+  assert.equal(ui.get('captured-flag').textContent, '');
   assert.equal(ui.run('state.flagFeedback.get(2).error'), true);
 });
 
@@ -160,15 +160,16 @@ test('an unconfirmed completion response cannot alter the client award state', a
   assert.match(ui.run('state.flagFeedback.get(2).message'), /did not confirm/);
 });
 
-test('a chat reset accepts zero current progress while retaining earned completion and the original flag', async () => {
+test('a chat reset clears current progress, completion and points', async () => {
   const ui = studentUI({completed: true});
-  ui.respond(ui.result({newAward: false, points: 0, version: '2.0.1', currentProgress: 0}));
+  const reset=ui.result({awarded:false,newAward:false,points:0,version:'2.0.0',currentProgress:0});
+  reset.lab.exploited=false;reset.lab.flag=null;ui.respond(reset);
   await ui.run('restartLab()');
   assert.equal(ui.run("state.labs['2'].verified_instruction_count"), 0);
-  assert.equal(ui.run("state.labs['2'].completed"), true);
-  assert.equal(ui.run('state.summary.score'), 100);
-  assert.equal(ui.get('captured-flag').textContent, 'test-captured-flag');
-  assert.equal(ui.get('flag-heading').textContent, 'Lab complete.');
+  assert.equal(ui.run("state.labs['2'].completed"), false);
+  assert.equal(ui.run('state.summary.score'), 0);
+  assert.equal(ui.get('captured-flag').textContent, '');
+  assert.equal(ui.get('flag-heading').textContent, 'Submit a flag');
 });
 
 test('Lab 2 difficulty changes explain and retain the captured flag and earned points', async () => {
@@ -181,7 +182,7 @@ test('Lab 2 difficulty changes explain and retain the captured flag and earned p
   assert.equal(ui.run("state.labs['2'].completed"), true);
   assert.equal(ui.run('state.summary.score'), 100);
   assert.equal(ui.run("state.labs['2'].defense_level"), 1);
-  assert.equal(ui.get('captured-flag').textContent, 'test-captured-flag');
+  assert.equal(ui.get('captured-flag').textContent, '');
 });
 
 test('a stale winning response cannot replace a newer reset or claim another award', async () => {

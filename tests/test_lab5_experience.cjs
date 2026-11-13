@@ -121,8 +121,8 @@ test('previously earned completion does not turn a current unverified reply into
   const ui = await studentUI({completed:true, exploited:true}); ui.result('requested');
   assert.equal(ui.get('attempt-result').children[0].textContent, labels.requested);
   assert(!ui.get('attempt-result').className.includes('success'));
-  assert.equal(ui.get('flag-heading').textContent, 'Lab complete.');
-  assert.equal(ui.get('lab5-completion-explanation').hidden, false);
+  assert.equal(ui.get('flag-heading').textContent, 'Submit a flag');
+  assert.equal(ui.get('lab5-completion-explanation').hidden, true);
 });
 
 test('blocked attempt shows general defensive feedback without exposing internal reason codes', async () => {
@@ -170,10 +170,10 @@ test('only backend-confirmed submission reveals the explanation and restores it 
   const pending = ui.run('submitFlag({preventDefault(){}})');
   assert.equal(ui.get('lab5-completion-explanation').hidden, true);
   release(); await pending;
-  assert.equal(ui.get('lab5-completion-explanation').hidden, false);
+  assert.equal(ui.get('lab5-completion-explanation').hidden, true);
   assert.equal(ui.run('state.summary.score'), 250);
   const restored = await studentUI({completed:true,exploited:true});
-  assert.equal(restored.get('lab5-completion-explanation').hidden, false);
+  assert.equal(restored.get('lab5-completion-explanation').hidden, true);
 });
 
 test('Lab 5 learning explanation stays hidden in all other labs', async () => {

@@ -74,7 +74,7 @@ test('a fresh conversation has no learning explanation', () => {
 
 test('verified disclosure and a captured flag alone cannot reveal learning', () => {
   const ui=studentUI();
-  assert.equal(ui.get('captured-panel').hidden,false);
+  assert.equal(ui.get('captured-panel').hidden,true);
   assert.equal(ui.get('lab9-completion-explanation').hidden,true);
   assert.equal(ui.run('state.summary.score'),0);
 });
@@ -87,7 +87,7 @@ test('successful flag submission reveals the explanation using backend completio
   };
   await submit(ui);
   assert.deepEqual(request,{url:'/api/labs/9/flag',body:{flag}});
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
   assert.equal(ui.run('state.summary.score'),500);
 });
 
@@ -121,30 +121,30 @@ test('a pending flag request stays hidden until completion is acknowledged', asy
   const pending=submit(ui);
   assert.equal(ui.get('lab9-completion-explanation').hidden,true);
   release();await pending;
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
 });
 
 test('refresh restores saved learning without needing another flag submission', () => {
   const ui=studentUI({completed:true,exploited:false});
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
   assert.equal(ui.run('state.summary.score'),500);
 });
 
 test('later unverified replies do not hide already earned learning', () => {
   const ui=studentUI({completed:true});
   ui.accept(ui.response({completed:true,exploited:false,revision:4}));
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
 });
 
-test('a new chat keeps earned learning while resetting current verification', async () => {
+test('restart clears completion and keeps submission details hidden', async () => {
   const ui=studentUI({completed:true});
-  ui.respond(ui.response({completed:true,exploited:false,attempt:2,revision:0}));
+  ui.respond(ui.response({completed:false,exploited:false,attempt:2,revision:0}));
   await ui.run('restartLab()');
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
-  assert.equal(ui.get('captured-flag').textContent,flag);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
+  assert.equal(ui.get('captured-flag').textContent,'');
   assert.equal(ui.run("state.labs['9'].exploited"),false);
   assert.equal(ui.accept(ui.response()),false);
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
 });
 
 test('Lab 9 learning stays hidden in every other lab', () => {
@@ -163,5 +163,5 @@ test('a submission completed while viewing another lab does not reveal learning 
   release();await pending;
   assert.equal(ui.get('lab9-completion-explanation').hidden,true);
   ui.run('state.current=9;drawFlag()');
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
 });

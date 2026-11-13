@@ -935,7 +935,7 @@ class LabTests(unittest.TestCase):
                 self.assertEqual(evaluator.call_args.args[2], catalog.LAB5_REFUSAL)
                 self.assert_lab5_unawarded(result)
 
-    def test_lab5_restart_clears_verification_preserves_earned_flag_and_other_labs(self):
+    def test_lab5_restart_clears_award_and_old_flag_and_preserves_other_labs(self):
         self.request()
         _, before = self.app.store.get(self.sid())
         others = {k: copy.deepcopy(v) for k, v in before["labs"].items() if k != "5"}
@@ -946,12 +946,11 @@ class LabTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(reset["lab"]["messages"], [])
         self.assertFalse(reset["lab"]["exploited"])
-        self.assertTrue(reset["lab"]["completed"])
-        self.assertEqual(reset["lab"]["flag"], old_flag)
-        self.assertEqual(reset["summary"]["score"], 250)
+        self.assertFalse(reset["lab"]["completed"])
+        self.assertIsNone(reset["lab"]["flag"])
+        self.assertEqual(reset["summary"]["score"], 0)
         status, replay = self.request("/api/labs/5/flag", {"flag": old_flag})
-        self.assertEqual(status, 200)
-        self.assertEqual(replay["flag_submission"]["points_awarded"], 0)
+        self.assertEqual(status, 403)
         self.reply = LAB5_DISCLOSURE
         status, single = self.chat(5, LAB5_MESSAGES[2])
         self.assertEqual(status, 200)
@@ -962,10 +961,10 @@ class LabTests(unittest.TestCase):
             status, new_attempt = self.chat(5, message)
             self.assertEqual(status, 200)
         self.assertTrue(new_attempt["lab"]["last_result"]["triggered"])
-        self.assertEqual(new_attempt["lab"]["flag"], old_flag)
-        status, replay = self.request("/api/labs/5/flag", {"flag": old_flag})
+        self.assertNotEqual(new_attempt["lab"]["flag"], old_flag)
+        status, replay = self.request("/api/labs/5/flag", {"flag": new_attempt["lab"]["flag"]})
         self.assertEqual(status, 200)
-        self.assertEqual(replay["flag_submission"]["points_awarded"], 0)
+        self.assertEqual(replay["flag_submission"]["points_awarded"], 250)
         _, after = self.app.store.get(self.sid())
         self.assertEqual({k: v for k, v in after["labs"].items() if k != "5"}, others)
 
@@ -1162,20 +1161,21 @@ class LabTests(unittest.TestCase):
                 self.assertTrue(result["lab"]["last_result"]["triggered"])
                 self.assertTrue(result["lab"]["exploited"])
                 self.assertEqual(result["lab"]["verified_instruction_count"], 3)
-                self.assertIs(result["lab"]["completed"], index > 0)
-                self.assertEqual(result["summary"]["score"], 100 if index else 0)
+                self.assertFalse(result["lab"]["completed"])
+                self.assertEqual(result["summary"]["score"], 0)
                 flag = result["lab"]["flag"]
                 self.assertRegex(flag, r"^PANOPTIS\{[A-F0-9]{32}\}$")
                 if original_flag is None:
                     original_flag = flag
-                self.assertEqual(flag, original_flag)
+                if index:
+                    self.assertNotEqual(flag, original_flag)
                 status, submitted = self.request("/api/labs/2/flag", {"flag": flag})
                 self.assertEqual(status, 200)
                 self.assertTrue(submitted["lab"]["completed"])
                 self.assertEqual(submitted["summary"]["score"], 100)
                 self.assertEqual(submitted["summary"]["completed"], [2])
                 self.assertEqual(submitted["flag_submission"],
-                                 {"newly_completed": index == 0, "points_awarded": 0 if index else 100})
+                                 {"newly_completed": True, "points_awarded": 100})
                 status, repeated = self.request("/api/labs/2/flag", {"flag": flag})
                 self.assertEqual(status, 200)
                 self.assertEqual(repeated["summary"]["score"], 100)
@@ -2178,9 +2178,9 @@ class LabTests(unittest.TestCase):
         self.assertEqual(same["lab"]["flag"], again["lab"]["flag"])
         _, reset = self.request("/api/labs/3/reset", {})
         self.assertEqual(reset["lab"]["defense_level"], 1)
-        self.assertTrue(reset["lab"]["completed"])
+        self.assertFalse(reset["lab"]["completed"])
         self.assertFalse(reset["lab"]["exploited"])
-        self.assertEqual(reset["summary"]["score"], 150)
+        self.assertEqual(reset["summary"]["score"], 0)
 
     def test_defense_input_guards_use_stricter_threshold_at_level_two(self):
         self.request("/api/labs/1/defense", {"level": 1})

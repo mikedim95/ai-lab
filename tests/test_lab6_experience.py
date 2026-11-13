@@ -198,15 +198,19 @@ class Lab6ExperienceTests(unittest.TestCase):
         self.assertEqual(public["flag"], captured["lab"]["flag"])
         self.assertEqual(private, self.record())
 
-    def test_reset_and_difficulty_clear_current_feedback_and_preserve_earned_completion(self):
+    def test_difficulty_preserves_completion_and_restart_clears_it(self):
         captured = self.ask(LAB6_IDENTITY_REQUEST, LAB6_ADOPTED_REPLY)
         self.app.submit_flag(self.sid, 6, {"flag": captured["lab"]["flag"]})
-        for result in [self.app.reset(self.sid, 6), self.app.update_defense(self.sid, 6, {"level": 2})]:
+        for result in [self.app.update_defense(self.sid, 6, {"level": 2})]:
             self.assertIsNone(result["lab"]["last_result"])
             self.assertFalse(result["lab"]["exploited"])
             self.assertTrue(result["lab"]["completed"])
             self.assertEqual(result["lab"]["flag"], captured["lab"]["flag"])
             self.assertEqual(result["summary"]["score"], 200)
+        reset = self.app.reset(self.sid, 6)
+        self.assertFalse(reset["lab"]["completed"])
+        self.assertIsNone(reset["lab"]["flag"])
+        self.assertEqual(reset["summary"]["score"], 0)
 
     def test_public_feedback_is_read_only_private_and_student_isolated(self):
         self.ask(LAB6_IDENTITY_REQUEST, LAB6_ADOPTED_REPLY)

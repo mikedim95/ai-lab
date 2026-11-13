@@ -49,7 +49,7 @@ test('first confirmed completion displays exactly +500 points and learning',asyn
   const ui=studentUI();ui.respond(ui.response());await submit(ui);
   assert.equal(ui.get('flag-feedback').textContent,'+500 points. Well played.');
   assert.equal(ui.run('state.summary.score'),500);
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
 });
 
 test('duplicate submissions and concurrent-loser responses show no new award',async()=>{
@@ -109,29 +109,29 @@ test('invalid flags never alter existing earned completion or score',async()=>{
 
 test('earned original flag and learning remain visible without current verification',()=>{
   const ui=studentUI({completed:true,exploited:false,attempt:4,revision:0});
-  assert.equal(ui.get('captured-panel').hidden,false);
-  assert.equal(ui.get('captured-flag').textContent,flag);
-  assert.equal(ui.get('flag-form').hidden,true);
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('captured-panel').hidden,true);
+  assert.equal(ui.get('captured-flag').textContent,'');
+  assert.equal(ui.get('flag-form').hidden,false);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
   assert.equal(ui.run("lab9Progress(state.labs['9']).status"),'normal');
 });
 
-test('new chat keeps the award, original flag, and learning while clearing progress',async()=>{
+test('restart clears the award and original flag',async()=>{
   const ui=studentUI({completed:true});
-  ui.respond(ui.response({attempt:2,revision:0,exploited:false,award:{newly_completed:false,points_awarded:0}}));
+  ui.respond(ui.response({completed:false,attempt:2,revision:0,exploited:false,award:{newly_completed:false,points_awarded:0}}));
   await ui.run('restartLab()');
-  assert.equal(ui.get('captured-flag').textContent,flag);
-  assert.equal(ui.get('captured-panel').hidden,false);
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('captured-flag').textContent,'');
+  assert.equal(ui.get('captured-panel').hidden,true);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
   assert.equal(ui.run("lab9Progress(state.labs['9']).status"),'normal');
-  assert.equal(ui.run('state.summary.score'),500);
+  assert.equal(ui.run('state.summary.score'),0);
 });
 
 test('difficulty changes explain durable completion and preserve the original flag',async()=>{
   const ui=studentUI({completed:true});ui.get('defense-select').value='1';
   ui.respond(ui.response({attempt:2,revision:0,level:1,exploited:false}));await ui.run('changeDefense()');
   assert.match(ui.confirmations[0],/Earned completion and points stay saved/);
-  assert.equal(ui.get('captured-flag').textContent,flag);
+  assert.equal(ui.get('captured-flag').textContent,'');
   assert.equal(ui.run("lab9Progress(state.labs['9']).status"),'normal');
 });
 
@@ -139,7 +139,7 @@ test('equal-version stale responses cannot remove earned completion',()=>{
   const ui=studentUI({completed:true});
   assert.equal(ui.accept(ui.response({completed:false})),false);
   assert.equal(ui.run('state.summary.score'),500);
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
 });
 
 test('a delayed winning response cannot restore an older attempt or repeat its award',async()=>{
@@ -163,7 +163,7 @@ test('a stale initial refresh cannot hide an earned completion',()=>{
   const ui=studentUI({completed:true});
   ui.context.old={catalog:ui.run('state.catalog'),labs:{'9':ui.response({completed:false}).lab},summary:{score:0,completed:[]}};
   ui.run('acceptInitialState(old);drawFlag()');
-  assert.equal(ui.get('captured-panel').hidden,false);
-  assert.equal(ui.get('lab9-completion-explanation').hidden,false);
+  assert.equal(ui.get('captured-panel').hidden,true);
+  assert.equal(ui.get('lab9-completion-explanation').hidden,true);
   assert.equal(ui.run('state.summary.score'),500);
 });

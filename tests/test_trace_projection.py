@@ -188,7 +188,8 @@ class TraceProjectionTests(unittest.TestCase):
         original_flag = self.app.public_lab(self.sid, 9, record)['flag']
         completed = self.app.submit_flag(self.sid, 9, {'flag': original_flag})
         self.assertEqual(completed['summary']['score'], 500)
-        self.app.reset(self.sid, 9)
+        self.app.update_defense(self.sid, 9, {"level": 1})
+        self.app.update_defense(self.sid, 9, {"level": 0})
         fresh = self.complete()
         _, events = self.request(fresh['events_url'])
         self.assertEqual(events[-1]['outcome'], 'NO_EXPLOIT')

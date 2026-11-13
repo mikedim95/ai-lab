@@ -118,6 +118,35 @@ async function main() {
         assert.equal(await page.locator('#execution-timeline').getAttribute('data-state'),'idle');
       });
 
+      await check(device+': prominent restart and solution modal remain accessible',async()=>{
+        assert.equal(await page.locator('#restart-lab').evaluate(element=>Boolean(element.closest('.topbar'))),true);
+        assert.match(await page.locator('#restart-lab').innerText(),/Restart lab/);
+        assert((await painted('#restart-lab')).painted,'restart control is clipped');
+        assert.match(await page.locator('#restart-lab').getAttribute('title'),/earned points/);
+        assert.equal(await page.locator('#solution-button').isVisible(),false);
+        const total=await page.evaluate(()=>state.catalog[8].hints.length);
+        for(let index=0;index<total;index++){
+          await reach('#hint-button','reveal hint control');await page.locator('#hint-button').click();
+          assert.equal(await page.locator('#solution-button').isVisible(),index===total-1);
+        }
+        await reach('#solution-button','solution control');
+        const pair=await page.evaluate(()=>{
+          const hint=document.getElementById('hint-button').getBoundingClientRect(),solution=document.getElementById('solution-button').getBoundingClientRect();
+          return {hint:{right:hint.right,y:hint.y+hint.height/2},solution:{left:solution.left,y:solution.y+solution.height/2}};
+        });
+        assert(pair.solution.left>=pair.hint.right-1&&Math.abs(pair.solution.y-pair.hint.y)<=1,'solution must sit beside Close all hints: '+JSON.stringify(pair));
+        await page.locator('#solution-button').click();
+        assert.equal(await page.locator('#solution-dialog').evaluate(element=>element.open),true);
+        assert.match(await page.locator('#solution-heading').innerText(),/Lab 9:/);
+        assert.match(await page.locator('#solution-dialog').innerText(),/Solution coming soon\./);
+        await screenshot('solution-placeholder');
+        await page.keyboard.press('Escape');
+        assert.equal(await page.locator('#solution-dialog').evaluate(element=>element.open),false);
+        await reach('#hint-button','close all hints control');await page.locator('#hint-button').click();
+        assert.equal(await page.locator('#solution-button').isVisible(),false);
+        await dock('hint solution closed');
+      });
+
       await check(device+': right sidebar collapses without taking workspace height and stages run vertically',async()=>{
         await openPipeline();const opened=await rects();
         const nodes=await page.locator('[data-trace-node]').evaluateAll(elements=>elements.map(element=>{

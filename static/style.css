@@ -21,6 +21,16 @@ dialog{color:var(--ink);border:1px solid var(--line);border-radius:15px;box-shad
 .lab-meta #difficulty{display:none}
 @media(max-width:780px){.heading-actions #restart-lab{display:inline-flex;font-size:0;padding:6px 8px}.heading-actions #restart-lab::after{content:'↻';font-size:17px;line-height:1.2}}
 @media(max-width:380px){.heading-actions{position:static}}
+.topbar{flex-wrap:wrap}
+.restart-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:7px 12px;border:1px solid #dfb3a8;border-radius:7px;background:#fff2ec;color:#942f25;font-size:12px;font-weight:600;white-space:nowrap}
+.restart-button:hover:not(:disabled){background:#fbe1d7;border-color:#c78676}
+.restart-button>span{font-size:18px;line-height:1}
+.hint-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px}
+.hint-actions .text-button{font-size:11px;gap:5px}
+.hint-actions .secondary-button{padding:5px 8px;font-size:11px}
+.solution-dialog{width:min(600px,calc(100vw - 32px))}
+@media(min-width:781px) and (max-width:1100px){.topbar{column-gap:12px}.lab-picker select{width:180px}}
+@media(max-width:780px){.topbar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px 12px}.brand{grid-column:1;grid-row:1}.ai-status{grid-column:2;grid-row:1;justify-self:end}.lab-picker{grid-column:1;grid-row:2;min-width:0}.lab-picker select{width:100%}.restart-button{grid-column:2;grid-row:2;min-height:34px}.header-field[for=defense-select]{grid-column:1 / -1;grid-row:3}.header-field[for=defense-select] select{flex:1}}
 
 @media(max-width:780px){.lab-description{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}}
 .message .simulator-result{padding:12px 14px;margin-bottom:12px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;background:var(--soft);font-size:12px;line-height:1.65;overflow-wrap:anywhere}

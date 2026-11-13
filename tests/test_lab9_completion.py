@@ -56,6 +56,13 @@ class Lab9CompletionTests(unittest.TestCase):
         self.assertEqual(result["summary"]["score"], 500)
         self.assertEqual(result["summary"]["completed"], [9])
 
+    def assert_reset(self, result):
+        self.assertFalse(result["lab"]["completed"])
+        self.assertFalse(result["lab"]["exploited"])
+        self.assertIsNone(result["lab"]["flag"])
+        self.assertEqual(result["summary"]["score"], 0)
+        self.assertEqual(result["summary"]["completed"], [])
+
     def assert_new_attempt(self, result):
         self.assertFalse(result["lab"]["exploited"])
         self.assertIsNone(result["lab"]["last_result"])
@@ -166,13 +173,13 @@ print(json.dumps({'flag_submission':result['flag_submission'],'score':result['su
         repeated = reopened.submit_flag(self.sid, 9, {"flag": first["lab"]["flag"]})
         self.assertEqual(repeated["flag_submission"]["points_awarded"], 0)
 
-    def test_new_chat_preserves_completion_and_original_flag(self):
+    def test_restart_clears_completion_original_flag_and_private_progress(self):
         first = self.complete()
         result = self.app.reset(self.sid, 9)
-        self.assert_retained(result, first["lab"]["flag"])
+        self.assert_reset(result)
         self.assert_new_attempt(result)
         self.assertEqual(result["lab"]["state_version"], [2, 0])
-        self.assertEqual(self.record()["lab9_flag_attempt"], 1)
+        self.assertNotIn("lab9_flag_attempt", self.record())
         self.assertEqual(self.record().get("lab9_verification_receipts", []), [])
 
     def test_all_difficulty_changes_preserve_completion_without_verification(self):
@@ -184,15 +191,15 @@ print(json.dumps({'flag_submission':result['flag_submission'],'score':result['su
             self.assertEqual(result["lab"]["defense_level"], level)
             self.assertEqual(self.record()["lab9_flag_attempt"], 1)
 
-    def test_original_earned_flag_is_accepted_after_resets_difficulty_and_restart(self):
+    def test_revoked_flag_stays_invalid_after_difficulty_change_and_backend_restart(self):
         flag = self.complete()["lab"]["flag"]
         self.app.reset(self.sid, 9)
         self.app.update_defense(self.sid, 9, {"level": 2})
         reopened = server.Application(self.directory)
-        result = reopened.submit_flag(self.sid, 9, {"flag": flag})
-        self.assert_retained(result, flag)
-        self.assertEqual(result["flag_submission"], {"newly_completed": False, "points_awarded": 0})
-        self.assertFalse(result["lab"]["exploited"])
+        with self.assertRaises(server.APIError) as error:
+            reopened.submit_flag(self.sid, 9, {"flag": flag})
+        self.assertEqual(error.exception.status, 403)
+        self.assert_reset(self.public(reopened))
 
     def test_unsubmitted_flags_are_still_bound_to_the_current_verified_attempt(self):
         old = self.unlock()["lab"]["flag"]
@@ -234,7 +241,7 @@ print(json.dumps({'flag_submission':result['flag_submission'],'score':result['su
         self.app.reset(self.sid, 9)
         self.app.store.save(self.sid, stale)
         result = self.public()
-        self.assert_retained(result, first["lab"]["flag"])
+        self.assert_reset(result)
         self.assert_new_attempt(result)
         self.assertEqual(result["lab"]["state_version"], [2, 0])
 
@@ -283,7 +290,7 @@ print(json.dumps({'flag_submission':result['flag_submission'],'score':result['su
         first = self.complete()
         self.app.reset(self.sid, 9)
         result = self.ask(DISCLOSURE)
-        self.assert_retained(result, first["lab"]["flag"])
+        self.assert_reset(result)
         self.assertFalse(result["lab"]["exploited"])
         self.assertFalse(result["lab"]["last_result"]["triggered"])
         self.assertEqual(result["lab"]["guardrail_status"], "normal")
@@ -325,20 +332,24 @@ print(json.dumps({'flag_submission':result['flag_submission'],'score':result['su
         self.assertFalse(result["lab"]["exploited"])
         self.assertEqual(self.record()["lab9_flag_attempt"], 1)
 
-    def test_verified_new_attempt_keeps_original_earned_origin(self):
+    def test_restart_requires_new_refusals_and_disclosure_to_earn_a_new_flag(self):
         first = self.complete()
         self.app.reset(self.sid, 9)
         result = self.unlock()
         self.assertTrue(result["lab"]["exploited"])
+        self.assertFalse(result["lab"]["completed"])
+        self.assertEqual(result["summary"]["score"], 0)
         self.assertEqual(result["lab"]["guardrail_status"], "disclosed")
-        self.assert_retained(result, first["lab"]["flag"])
-        self.assertEqual(self.record()["lab9_flag_attempt"], 1)
+        self.assertNotEqual(result["lab"]["flag"], first["lab"]["flag"])
         self.assertEqual(self.record()["lab9_verification_receipts"][-1]["attempt"], 2)
-        current_flag = self.app.store.flag(self.sid, 9, 2)
-        self.assertNotEqual(current_flag, first["lab"]["flag"])
-        with self.assertRaises(server.APIError):
-            self.app.submit_flag(self.sid, 9, {"flag": current_flag})
-        self.assertEqual(self.app.submit_flag(self.sid, 9, {"flag": first["lab"]["flag"]})["flag_submission"]["points_awarded"], 0)
+        with self.assertRaises(server.APIError) as error:
+            self.app.submit_flag(self.sid, 9, {"flag": first["lab"]["flag"]})
+        self.assertEqual(error.exception.status, 400)
+        earned = self.app.submit_flag(self.sid, 9, {"flag": result["lab"]["flag"]})
+        self.assert_retained(earned, result["lab"]["flag"])
+        self.assertEqual(self.record()["lab9_flag_attempt"], 2)
+        self.assertEqual(earned["flag_submission"]["points_awarded"], 500)
+        self.assertEqual(self.app.submit_flag(self.sid, 9, {"flag": result["lab"]["flag"]})["flag_submission"]["points_awarded"], 0)
 
     def test_completion_preserves_existing_receipts_flag_key_and_database_schema(self):
         flag = self.unlock()["lab"]["flag"]
@@ -363,7 +374,6 @@ print(json.dumps({'flag_submission':result['flag_submission'],'score':result['su
         expected = self.app.store.flag(self.sid, 9, 7)
         reopened = server.Application(self.directory)
         self.assert_retained(self.public(reopened), expected)
-        self.assert_retained(reopened.reset(self.sid, 9), expected)
         self.assertFalse(self.public(reopened)["lab"]["exploited"])
         self.assertEqual(reopened.submit_flag(self.sid, 9, {"flag": expected})["flag_submission"]["points_awarded"], 0)
 
@@ -387,7 +397,7 @@ print(json.dumps({'flag_submission':result['flag_submission'],'score':result['su
         self.app.update_defense(self.sid, 9, {"level": 1})
         after = self.app.store.get(self.sid)[1]
         self.assertEqual({key: value for key, value in after["labs"].items() if key != "9"}, before)
-        self.assertEqual(self.app.summary(after)["score"], 2100)
+        self.assertEqual(self.app.summary(after)["score"], 1600)
 
 
 if __name__ == "__main__":

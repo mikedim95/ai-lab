@@ -120,10 +120,10 @@ class Lab8ReleaseHTTPTests(unittest.TestCase):
         self.assertIsNone(value["lab"]["flag"])
         self.assertEqual(value["summary"]["score"], 0)
 
-    def test_http_completion_survives_refresh_reset_and_difficulty(self):
+    def test_http_completion_survives_refresh_and_difficulty_until_explicit_restart(self):
         flag = self.capture()
         self.request("flag", {"flag": flag}, sid=self.sid)
-        for action, body in (("reset", {}), ("defense", {"level": 1}), ("defense", {"level": 2})):
+        for action, body in (("defense", {"level": 1}), ("defense", {"level": 2})):
             status, value, _ = self.request(action, body, sid=self.sid)
             self.assertEqual(status, 200)
             self.assertTrue(value["lab"]["completed"])
@@ -135,6 +135,13 @@ class Lab8ReleaseHTTPTests(unittest.TestCase):
         _, value, _ = self.request(sid=self.sid)
         self.assertTrue(value["labs"]["8"]["completed"])
         self.assertEqual(value["labs"]["8"]["flag"], flag)
+        status, reset, _ = self.request("reset", {}, sid=self.sid)
+        self.assertEqual(status, 200)
+        self.assertFalse(reset["lab"]["completed"])
+        self.assertIsNone(reset["lab"]["flag"])
+        self.assertEqual(reset["summary"]["score"], 0)
+        status, _, _ = self.request("flag", {"flag": flag}, sid=self.sid)
+        self.assertEqual(status, 403)
 
     def test_completion_during_generation_cannot_be_erased_by_old_reply(self):
         flag = self.capture()

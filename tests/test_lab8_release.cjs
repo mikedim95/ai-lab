@@ -44,7 +44,7 @@ test('first authoritative backend award displays exactly +400 points',async()=>{
   const view=ui();view.respond(view.response());await submit(view);
   assert.equal(view.get('flag-feedback').textContent,'+400 points. Well played.');
   assert.equal(view.run('state.summary.score'),400);
-  assert.equal(view.get('lab8-completion-explanation').hidden,false);
+  assert.equal(view.get('lab8-completion-explanation').hidden,true);
 });
 
 test('duplicate and concurrent-loser responses display Lab already completed with no award',async()=>{
@@ -89,15 +89,16 @@ test('invalid flags display backend error and retain earned completion',async()=
   }
 });
 
-test('earned flag and learning remain visible after a reset clears current verification',async()=>{
+test('restart clears earned flag, completion and points',async()=>{
   const view=ui({completed:true});
-  view.respond(view.response({attempt:2,revision:3,verified:false}));
+  const reset=view.response({complete:false,attempt:2,revision:0,verified:false});
+  reset.lab.flag=null;view.respond(reset);
   await view.run('restartLab()');
   assert.equal(view.run("state.labs['8'].exploited"),false);
-  assert.equal(view.get('captured-panel').hidden,false);
-  assert.equal(view.get('captured-flag').textContent,flag);
-  assert.equal(view.get('lab8-completion-explanation').hidden,false);
-  assert.equal(view.run('state.summary.score'),400);
+  assert.equal(view.get('captured-panel').hidden,true);
+  assert.equal(view.get('captured-flag').textContent,'');
+  assert.equal(view.get('lab8-completion-explanation').hidden,true);
+  assert.equal(view.run('state.summary.score'),0);
 });
 
 test('difficulty confirmation describes durable completion and preserves original flag',async()=>{
@@ -107,24 +108,24 @@ test('difficulty confirmation describes durable completion and preserves origina
   assert.match(view.confirmations[0],/Earned completion and points stay saved/);
   assert.match(view.confirmations[0],/knowledge base stays saved/);
   assert.equal(view.run("state.labs['8'].defense_level"),2);
-  assert.equal(view.get('captured-flag').textContent,flag);
-  assert.equal(view.get('lab8-completion-explanation').hidden,false);
+  assert.equal(view.get('captured-flag').textContent,'');
+  assert.equal(view.get('lab8-completion-explanation').hidden,true);
 });
 
 test('refresh restores earned flag even when current verification is false',()=>{
   const view=ui({completed:true,exploited:false,attempt:4});
-  assert.equal(view.get('captured-panel').hidden,false);
-  assert.equal(view.get('captured-flag').textContent,flag);
-  assert.equal(view.get('flag-form').hidden,true);
-  assert.equal(view.get('lab8-completion-explanation').hidden,false);
+  assert.equal(view.get('captured-panel').hidden,true);
+  assert.equal(view.get('captured-flag').textContent,'');
+  assert.equal(view.get('flag-form').hidden,false);
+  assert.equal(view.get('lab8-completion-explanation').hidden,true);
 });
 
-test('stale or newer-version uncompleted state cannot erase an earned award',()=>{
+test('same-attempt and older uncompleted state cannot erase an earned award',()=>{
   const view=ui({completed:true,attempt:2,revision:3});
-  for(const response of [view.response({complete:false,attempt:1}),view.response({complete:false,attempt:99})]) {
+  for(const response of [view.response({complete:false,attempt:1}),view.response({complete:false,attempt:2,revision:99})]) {
     assert.equal(view.accept(response),false);
     assert.equal(view.run('state.summary.score'),400);
-    assert.equal(view.get('lab8-completion-explanation').hidden,false);
+    assert.equal(view.get('lab8-completion-explanation').hidden,true);
   }
 });
 

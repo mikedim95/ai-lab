@@ -52,8 +52,8 @@ test('a fresh locked Lab 4 has no captured flag or completion explanation', () =
 
 test('verified capture alone shows the flag without completion or points', () => {
   const ui = studentUI();
-  assert.equal(ui.get('captured-panel').hidden, false);
-  assert.equal(ui.get('captured-flag').textContent, flag);
+  assert.equal(ui.get('captured-panel').hidden, true);
+  assert.equal(ui.get('captured-flag').textContent, '');
   assert.equal(ui.get('lab4-completion-explanation').hidden, true);
   assert.equal(ui.get('flag-form').hidden, false);
   assert.equal(ui.run('state.summary.score'), 0);
@@ -63,10 +63,10 @@ test('the first backend-confirmed award displays exactly 100 points and the lear
   const ui = studentUI();
   ui.respond(ui.result());
   await submit(ui);
-  assert.equal(ui.get('flag-heading').textContent, 'Lab complete.');
+  assert.equal(ui.get('flag-heading').textContent, 'Submit a flag');
   assert.equal(ui.get('flag-feedback').textContent, '+100 points. Well played.');
-  assert.equal(ui.get('flag-form').hidden, true);
-  assert.equal(ui.get('lab4-completion-explanation').hidden, false);
+  assert.equal(ui.get('flag-form').hidden, false);
+  assert.equal(ui.get('lab4-completion-explanation').hidden, true);
   assert.equal(ui.run('state.summary.score'), 100);
 });
 
@@ -87,7 +87,7 @@ test('a concurrent loser tab accepts completion without showing a second award',
   const ui = studentUI();
   ui.respond(ui.result({newAward:false,points:0}));
   await submit(ui);
-  assert.equal(ui.get('lab4-completion-explanation').hidden, false);
+  assert.equal(ui.get('lab4-completion-explanation').hidden, true);
   assert.doesNotMatch(ui.get('flag-feedback').textContent, /\+100/);
   assert.equal(ui.run('state.summary.score'), 100);
 });
@@ -112,7 +112,7 @@ test('incorrect flags never change score or previous completion', async () => {
     await submit(ui);
     assert.equal(ui.run("state.labs['4'].completed"), completed);
     assert.equal(ui.run('state.summary.score'), completed ? 100 : 0);
-    assert.equal(ui.get('lab4-completion-explanation').hidden, !completed);
+    assert.equal(ui.get('lab4-completion-explanation').hidden, true);
     assert.match(ui.get('flag-feedback').textContent, /does not match/);
   }
 });
@@ -138,17 +138,17 @@ test('an unconfirmed completion response cannot reveal the learning explanation'
   assert.match(ui.get('flag-feedback').textContent, /did not confirm Lab 4 completion/);
 });
 
-test('new conversation retains earned completion and captured flag with current verification cleared', async () => {
+test('restart clears earned completion, captured flag and points', async () => {
   const ui = studentUI({completed:true});
-  ui.respond(ui.result({newAward:false,points:0,attempt:2,verified:false}));
+  ui.respond(ui.result({awarded:false,newAward:false,points:0,attempt:2,verified:false}));
   await ui.run('restartLab()');
-  assert.equal(ui.run("state.labs['4'].completed"), true);
+  assert.equal(ui.run("state.labs['4'].completed"), false);
   assert.equal(ui.run("state.labs['4'].exploited"), false);
   assert.equal(ui.run("state.labs['4'].last_result"), null);
-  assert.equal(ui.get('captured-panel').hidden, false);
-  assert.equal(ui.get('captured-flag').textContent, flag);
-  assert.equal(ui.get('lab4-completion-explanation').hidden, false);
-  assert.equal(ui.run('state.summary.score'), 100);
+  assert.equal(ui.get('captured-panel').hidden, true);
+  assert.equal(ui.get('captured-flag').textContent, '');
+  assert.equal(ui.get('lab4-completion-explanation').hidden, true);
+  assert.equal(ui.run('state.summary.score'), 0);
 });
 
 test('difficulty changes describe and retain earned completion while clearing current verification', async () => {
@@ -160,7 +160,7 @@ test('difficulty changes describe and retain earned completion while clearing cu
   assert.match(ui.confirmations[0], /Earned completion and points stay saved/);
   assert.equal(ui.run("state.labs['4'].defense_level"), 1);
   assert.equal(ui.run("state.labs['4'].exploited"), false);
-  assert.equal(ui.get('lab4-completion-explanation').hidden, false);
+  assert.equal(ui.get('lab4-completion-explanation').hidden, true);
   assert.equal(ui.run('state.summary.score'), 100);
 });
 
@@ -183,7 +183,7 @@ test('an older uncompleted response cannot undo a same-attempt backend completio
   ui.context.old = ui.result({awarded:false,newAward:false,points:0});
   assert.equal(ui.run('acceptResponse(4,old)'), false);
   assert.equal(ui.run("state.labs['4'].completed"), true);
-  assert.equal(ui.get('lab4-completion-explanation').hidden, false);
+  assert.equal(ui.get('lab4-completion-explanation').hidden, true);
   assert.equal(ui.run('state.summary.score'), 100);
 });
 
@@ -197,7 +197,7 @@ test('a stale incorrect-flag error cannot overwrite a newer successful completio
   release();
   await pending;
   assert.equal(ui.run('state.flagFeedback.get(4).message'), 'Current completion');
-  assert.equal(ui.get('lab4-completion-explanation').hidden, false);
+  assert.equal(ui.get('lab4-completion-explanation').hidden, true);
 });
 
 test('an old flag error after an uncompleted reset cannot pollute the new attempt', async () => {
@@ -229,14 +229,14 @@ test('finishing a Lab 4 submission while viewing Lab 2 does not reveal the Lab 4
   assert.equal(ui.get('lab4-completion-explanation').hidden, true);
   assert.equal(ui.run('state.summary.score'), 200);
   ui.run('state.current = 4; drawFlag()');
-  assert.equal(ui.get('lab4-completion-explanation').hidden, false);
+  assert.equal(ui.get('lab4-completion-explanation').hidden, true);
 });
 
 test('refresh restores the earned flag and explanation even when the current attempt is unverified', () => {
   const ui = studentUI({completed:true,exploited:false,attempt:4});
-  assert.equal(ui.get('flag-heading').textContent, 'Lab complete.');
-  assert.equal(ui.get('captured-panel').hidden, false);
-  assert.equal(ui.get('captured-flag').textContent, flag);
-  assert.equal(ui.get('lab4-completion-explanation').hidden, false);
+  assert.equal(ui.get('flag-heading').textContent, 'Submit a flag');
+  assert.equal(ui.get('captured-panel').hidden, true);
+  assert.equal(ui.get('captured-flag').textContent, '');
+  assert.equal(ui.get('lab4-completion-explanation').hidden, true);
   assert.equal(ui.run("state.labs['4'].exploited"), false);
 });

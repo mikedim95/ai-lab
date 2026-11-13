@@ -40,7 +40,7 @@ async function studentUI({completed = false, exploited = false} = {}) {
   }
   const get = id => elements.get(id) || null;
   const labs = Object.fromEntries(Array.from({length:9}, (_,i) => [String(i+1), {
-    id:i+1, messages:[], documents:[], completed:i===5&&completed, exploited:i===5&&exploited,
+    id:i+1, attempt:1, reply_revision:1, messages:[], documents:[], completed:i===5&&completed, exploited:i===5&&exploited,
     flag:i===5&&(completed||exploited)?'PANOPTIS{fixture}':null, last_result:null,
     trusted_snapshot:{water_in_pct:60,fuel_in_pct:55,temperature_c:148,pressure_bar:3.1,power_out_kw:36},
   }]));
@@ -128,8 +128,8 @@ test('earned completion never makes a later failed reply appear verified', async
   const ui=await studentUI({completed:true,exploited:true}); ui.result('refused');
   assert.equal(ui.get('attempt-result').children[0].textContent,labels.refused);
   assert(!ui.get('attempt-result').className.includes('success'));
-  assert.equal(ui.get('flag-heading').textContent,'Lab complete.');
-  assert.equal(ui.get('lab6-completion-explanation').hidden,false);
+  assert.equal(ui.get('flag-heading').textContent,'Submit a flag');
+  assert.equal(ui.get('lab6-completion-explanation').hidden,true);
   assert.equal(ui.run('state.summary.score'),200);
 });
 
@@ -151,15 +151,15 @@ test('failed chat requests cannot restore a previous success label', async () =>
   assert.equal(ui.get('attempt-result').hidden,true);
 });
 
-test('reset clears current feedback and hints while retaining earned completion', async () => {
+test('restart clears current feedback, hints and earned completion', async () => {
   const ui=await studentUI({completed:true,exploited:true}); ui.result('adopted',true); ui.click('hint-button');
-  ui.context.fetch=async()=>({ok:true,json:async()=>({lab:{id:6,attempt:2,reply_revision:0,messages:[],last_result:null,completed:true,exploited:false,flag:'PANOPTIS{fixture}'},summary:{score:200,completed:[6]}})});
+  ui.context.fetch=async()=>({ok:true,json:async()=>({lab:{id:6,attempt:2,reply_revision:0,messages:[],last_result:null,completed:false,exploited:false,flag:null},summary:{score:0,completed:[]}})});
   await ui.run('restartLab()'); ui.run('drawConversation()');
   assert.equal(ui.get('attempt-result').hidden,true);
   assert.equal(ui.get('hints').children.length,0);
-  assert.equal(ui.get('captured-panel').hidden,false);
-  assert.equal(ui.get('lab6-completion-explanation').hidden,false);
-  assert.equal(ui.run('state.summary.score'),200);
+  assert.equal(ui.get('captured-panel').hidden,true);
+  assert.equal(ui.get('lab6-completion-explanation').hidden,true);
+  assert.equal(ui.run('state.summary.score'),0);
 });
 
 test('difficulty confirmation accurately describes preserved completion', async () => {
@@ -170,7 +170,7 @@ test('difficulty confirmation accurately describes preserved completion', async 
   await ui.run('changeDefense()');
   assert.match(confirmation,/current verification/);
   assert.match(confirmation,/Earned completion and points stay saved/);
-  assert.equal(ui.get('lab6-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab6-completion-explanation').hidden,true);
 });
 
 test('learning explanation starts hidden with all requested teaching points', () => {
@@ -196,10 +196,10 @@ test('only confirmed flag submission reveals the explanation; refresh restores i
   const pending=ui.run('submitFlag({preventDefault(){}})');
   assert.equal(ui.get('lab6-completion-explanation').hidden,true);
   release(); await pending;
-  assert.equal(ui.get('lab6-completion-explanation').hidden,false);
+  assert.equal(ui.get('lab6-completion-explanation').hidden,true);
   assert.match(ui.get('flag-feedback').textContent,/\+200 points/);
   const restored=await studentUI({completed:true,exploited:true});
-  assert.equal(restored.get('lab6-completion-explanation').hidden,false);
+  assert.equal(restored.get('lab6-completion-explanation').hidden,true);
 });
 
 test('unconfirmed completion never reveals the explanation or awards points', async () => {
