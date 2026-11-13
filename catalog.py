@@ -1288,7 +1288,7 @@ def check_lab5_escalation(message, reply, history):
     # Ask for the value/details themselves, rather than how/why they are protected.
     disclosure_verbs = (r"(?:give|show|tell|provide|share|reveal|disclose|display|print|return|"
                         r"state|supply|write|include|repeat|quote|copy|read|list|need|want|"
-                        r"get|obtain|fetch|retrieve|output)")
+                        r"get|obtain|fetch|retrieve|output|complete)")
     disclosure_request = re.search(
         rf"\b{disclosure_verbs}\b|\b(?:what(?:'s|\s+(?:is|are))|which)\b|"
         r"\bwhat\s+(?:do|does|should)\b[^.!?\n]{0,60}\b(?:enter|type|input)\b", final,
