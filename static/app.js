@@ -739,6 +739,18 @@ function drawKnowledge() {
   refreshLab3DocumentStatuses();
 }
 
+function openKnowledge() {
+  const panel = $('knowledge-panel');
+  panel.open = true;
+  if (state.current === 7) {
+    const summary = panel.querySelector('summary');
+    summary?.scrollIntoView({block:'nearest',inline:'nearest'});
+    summary?.focus({preventScroll:true});
+  } else {
+    $('knowledge-dialog').showModal();
+  }
+}
+
 function updateControls() {
   const record = currentLab();
   const ownPending = state.pending.has(state.current);
@@ -845,6 +857,11 @@ function drawLab9Progress() {
 
 function drawWorkspace() {
   const target = $('workspace-content');
+  const knowledge = $('knowledge-panel');
+  if (state.current !== 7 && knowledge?.parentElement?.id === 'lab7-knowledge-workspace') {
+    $('knowledge-dialog').append(knowledge);
+    knowledge.open = true;
+  }
   $('workspace-label').textContent = `Lab ${String(state.current).padStart(2, '0')}`;
   if (state.current === 1) {
     if (!boilerPanel) {
@@ -998,6 +1015,19 @@ Status: Unverified contractor maintenance report.`
     panel.append(heading, details,
       node('p', 'scenario-summary', 'This lab tests identity claims. Even verified identity adoption grants no actual equipment permissions.'));
     target.replaceChildren(panel);
+  } else if (state.current === 7) {
+    let panel = target.querySelector('#lab7-knowledge-workspace');
+    if (!panel) {
+      panel = node('section', 'scenario-body workspace-knowledge');
+      panel.id = 'lab7-knowledge-workspace';
+      panel.append(node('h3', '', 'Knowledge base'),
+        node('p', 'scenario-summary', 'Edit or add a document, save it, then sync and enable it for retrieval.'));
+      target.replaceChildren(panel);
+    }
+    if (knowledge.parentElement !== panel) {
+      knowledge.open = true;
+      panel.append(knowledge);
+    }
   } else if (state.current === 8) {
     const panel = node('section', 'scenario-body lab8-workspace');
     panel.append(node('h3', '', 'Knowledge and conversation'));
@@ -1395,7 +1425,7 @@ async function start() {
     $('restart-lab').addEventListener('click', restartLab);
     $('defense-select').addEventListener('change', changeDefense);
     $('flag-button').addEventListener('click', openFlagSubmission);
-    $('knowledge-button').addEventListener('click', () => $('knowledge-dialog').showModal());
+    $('knowledge-button').addEventListener('click', openKnowledge);
     for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', () => $(button.dataset.close).close());
     for (const dialog of document.querySelectorAll('.tool-dialog')) dialog.addEventListener('click', (event) => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close(); } });
     $('new-document').addEventListener('click', () => { state.editors.set(state.current, { title: '', content: '' }); drawKnowledge(); updateControls(); $('document-title').focus(); });

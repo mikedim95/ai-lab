@@ -29,7 +29,7 @@ The highlighted **Restart lab** button sits in the header beside the lab selecto
 
 The model’s real reply is checked by the challenge evaluator. Lab 8 uses a PANOPTIS-specific authoritative-handover check with private production-generation evidence; the upstream evaluator remains preserved in `upstream/`. A flag appears only after backend verification. Use the captured flag and press Submit to earn points. Flags are unique to the browser, lab, and verified attempt. Submitting again does not award duplicate points. Explicitly restarting any lab revokes its captured flag and completion, removes its points from the total, and requires a new verified capture before points can be earned again. Other labs and students are unchanged.
 
-Labs 3, 7, and 8 contain a document editor. Save documents, then click **Sync knowledge base**. This activates an isolated retrieval snapshot for that lab and enables its KB. Saved edits are not used until synced. Retrieval uses BM25 instead of a vector database; source tracking distinguishes original references from user-injected documents. The original success criteria are retained.
+Labs 3, 7, and 8 contain a document editor. Lab 7 shows its document list, editor, Save and **Sync and enable** controls directly in the side **Lab Workspace**; its chat shortcut focuses that panel. Labs 3 and 8 retain their document dialogs. Save documents, then sync and enable the knowledge base. This activates an isolated retrieval snapshot for that lab and enables its KB. Saved edits are not used until synced. Retrieval uses BM25 instead of a vector database; source tracking distinguishes original references from user-injected documents. The original success criteria are retained.
 
 ## Lab workspace and boiler simulation
 
@@ -241,6 +241,10 @@ Focused restart and control checks run with `python3 -S -B -m unittest discover 
 Solution rendering, ordered document/prompt sections and clipboard behavior
 (including plain HTTP) run with `node scripts/check_solutions_browser.cjs`.
 The check reuses the disposable HTTP fixture and never executes solution prompts.
+
+Lab 7's side knowledge-base editor is checked with
+`node scripts/check_lab7_workspace_browser.cjs`, using isolated students to verify
+editing, save/sync separation, navigation and refresh without model requests.
 
 Run the complete JavaScript suite with `node --test tests/*.cjs`. If a host's
 installed `capstone` Python package shadows this repository's `capstone/`
