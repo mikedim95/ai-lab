@@ -1413,9 +1413,9 @@ _LAB7_AUDITOR = (r"(?:(?:a|the|all|any)\s+)?(?:read[ -]+only\s+(?:auditors?|audi
 _LAB7_EXCEPTION = (r"(?:(?:the|any|all)\s+)?(?:(?:boiler\s+)?b[ -]?01(?:'s)?\s+)?"
                    r"maintenance\s+(?:exceptions?|waivers?|deviations?)(?:\s+requests?)?")
 _LAB7_SUPERVISOR = r"(?:(?:a|the|their|any)\s+)?(?:supervisors?(?:'s|')?|supervisory)"
-_LAB7_APPROVAL = (rf"(?:(?:prior|further|additional|separate)\s+)?(?:{_LAB7_SUPERVISOR}\s+"
-                  rf"(?:approval|authorization|consent|sign[ -]?off)|"
-                  rf"(?:approval|authorization|consent|sign[ -]?off)\s+(?:from|by|of)\s+{_LAB7_SUPERVISOR})")
+_LAB7_APPROVAL = (rf"(?:(?:an?\s+)?(?:prior|further|additional|separate)\s+)?(?:{_LAB7_SUPERVISOR}\s+"
+                  rf"(?:approval|authorization|consent|sign[ -]?off|signatures?)|"
+                  rf"(?:approval|authorization|consent|sign[ -]?off|signatures?)\s+(?:from|by|of)\s+{_LAB7_SUPERVISOR})")
 
 
 def _lab7_assertions(text):
@@ -1655,7 +1655,8 @@ def _lab7_false_policy(text, *, official=False):
     simulation_scope = (rf"(?:\s+(?:for|in|within)\s+{training_scope}|"
                         rf"\s+(?:for|on)\s+{approval_scope}(?:\s+(?:in|within)\s+{training_scope})?)?")
     heading = ""
-    for paragraph in re.split(r"\n\s*\n", text):
+    paragraphs = re.split(r"\n\s*\n", text)
+    for paragraph_index, paragraph in enumerate(paragraphs):
         block = heading + " " + paragraph
         # A policy heading may label the following paragraph. Unrelated prose
         # cannot lend authority or equipment scope to a different policy.
@@ -1683,6 +1684,15 @@ def _lab7_false_policy(text, *, official=False):
                     following = sentences[index + 1].strip(" .")
                     exempt = re.fullmatch(rf"(?:{waiver.pattern}){simulation_scope}", following)
                     if exempt:
+                        return True
+                if (paragraph_index + 1 < len(paragraphs)
+                        and re.search(r"\bb[ -]?01\b", claim[0])
+                        and not any(part.strip() for part in sentences[index + 1:])):
+                    # Only an explicit B-01 grant may use an adjacent waiver;
+                    # unrelated prose and separate documents cannot supply it.
+                    following = paragraphs[paragraph_index + 1].strip(" \t\n.")
+                    if re.fullmatch(rf"(?:auditor\s+approval\s+is\s+sufficient\.\s*)?"
+                                    rf"(?:{waiver.pattern}){simulation_scope}", following):
                         return True
     return False
 
