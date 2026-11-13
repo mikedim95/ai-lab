@@ -334,14 +334,24 @@ Unused reservations expire after 30 seconds. The browser holds one active source
 eight recent traces, at most 257 events each, twenty reconnect attempts and a
 15-minute lifetime. Finished connections release their slots immediately. A
 128-entry completion cache covers failed terminal writes without subscriber
-queues. Reservation maintenance removes expired unused reservations and prunes
-older finished replay history in bounded batches, retaining the newest 200 per
-student. None of these limits cancel or reject the underlying chat request.
+queues. Trace creation, completion and reservation requests remove expired
+reservations and abandoned executions, deleting their events with their headers.
+Cleanup retains the newest 200 finished traces per student (including a separate
+bucket for requests without a bound session), and caps all stored traces at
+10,000 across identities. Recent live traces are preserved; when they occupy
+all slots, optional trace setup is declined while ordinary chat continues.
+Cleanup handles existing excess rows in batches of at most 16 per category on
+trace activity. It does not run a background timer or shrink the SQLite file;
+freed pages can be reused. None of these limits cancel or reject the underlying
+chat request.
 
 Focused checks: `python3 -S -B -m unittest discover -s tests -p test_trace_stream.py`,
 `node --test tests/test_trace_stream.cjs`, and
 `node scripts/check_trace_stream_browser.cjs` with Playwright installed. All use
 temporary identities/databases and mocked Ollama transport.
+Trace security and retention regressions also run with
+`python3 -S -B -m unittest discover -s tests -p 'test_trace_security.py'` and
+`python3 -S -B -m unittest discover -s tests -p 'test_trace_retention.py'`.
 
 ### Execution timeline
 

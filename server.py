@@ -95,6 +95,9 @@ TRACE_RUN_SECONDS = 900
 TRACE_STREAM_SECONDS = 60
 TRACE_POLL_SECONDS = .2
 TRACE_HEARTBEAT_SECONDS = 10
+TRACE_RETAIN_FINISHED = 200
+TRACE_MAX_STORED = 10000
+TRACE_PRUNE_BATCH = 16
 TRACE_REASONS = frozenset({
     "stage_started", "stage_completed", "lock_wait", "lock_acquired", "input_validated",
     "invalid_input", "request_rejected", "generation_busy", "session_loaded", "session_saved",
@@ -1057,37 +1060,85 @@ class Store:
                 db.execute("ALTER TABLE chat_traces ADD COLUMN started_at REAL")
             if "final_outcome" not in columns:
                 db.execute("ALTER TABLE chat_traces ADD COLUMN final_outcome TEXT")
+            db.execute("""CREATE INDEX IF NOT EXISTS chat_traces_finished_student
+                ON chat_traces(student_id, finished_at DESC, trace_id DESC) WHERE finished_at IS NOT NULL""")
+            db.execute("""CREATE INDEX IF NOT EXISTS chat_traces_finished_global
+                ON chat_traces(finished_at, trace_id) WHERE finished_at IS NOT NULL""")
+            db.execute("""CREATE INDEX IF NOT EXISTS chat_traces_unfinished_age
+                ON chat_traces(COALESCE(started_at,created_at)) WHERE finished_at IS NULL""")
+
+    def _prune_traces(self, db, student_id, *, reserve_slot=False):
+        """Bound only optional telemetry, within the caller's short transaction.
+
+        Work stays batched when an older installation has a backlog. If all
+        slots belong to live traces, new telemetry yields; chat still runs.
+        Delete events with their headers so cleanup cannot leave orphan rows.
+        """
+        now = time.time()
+        expired = [row[0] for row in db.execute("""SELECT trace_id FROM chat_traces
+            WHERE finished_at IS NULL AND COALESCE(started_at,created_at)<=?
+              AND (state='reserved' OR COALESCE(started_at,created_at)<=?)
+            ORDER BY COALESCE(started_at,created_at),trace_id LIMIT ?""",
+            (now-TRACE_RESERVATION_SECONDS, now-TRACE_RUN_SECONDS, TRACE_PRUNE_BATCH))]
+        old = [row[0] for row in db.execute("""SELECT trace_id FROM chat_traces
+            WHERE student_id IS ? AND finished_at IS NOT NULL
+            ORDER BY finished_at DESC,trace_id DESC LIMIT ? OFFSET ?""",
+            (student_id, TRACE_PRUNE_BATCH, TRACE_RETAIN_FINISHED))]
+
+        def remove(ids):
+            values = [(trace_id,) for trace_id in set(ids)]
+            db.executemany("DELETE FROM chat_trace_events WHERE trace_id=?", values)
+            db.executemany("DELETE FROM chat_traces WHERE trace_id=?", values)
+
+        remove(expired + old)
+        count = db.execute("SELECT COUNT(*) FROM chat_traces").fetchone()[0]
+        excess = count-TRACE_MAX_STORED+int(reserve_slot)
+        if excess > 0:
+            oldest = [row[0] for row in db.execute("""SELECT trace_id FROM chat_traces
+                WHERE finished_at IS NOT NULL ORDER BY finished_at,trace_id LIMIT ?""",
+                (min(excess, TRACE_PRUNE_BATCH),))]
+            remove(oldest)
+            count -= len(oldest)
+        return not reserve_slot or count < TRACE_MAX_STORED
 
     def append_trace_event(self, trace, event):
         # Separate rows/transactions keep telemetry out of session merges and
         # private verification receipts. A busy trace writer waits at most 25 ms.
         with self.connect(timeout=.025) as db:
-            db.execute("""INSERT INTO chat_traces
-                (trace_id, student_id, lab_id, difficulty, attempt, turn_id, created_at, started_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(trace_id) DO UPDATE SET student_id=excluded.student_id,
-                difficulty=excluded.difficulty, attempt=excluded.attempt, turn_id=excluded.turn_id""",
-                (trace.trace_id, trace.student_id, trace.lab_id, trace.difficulty,
-                 trace.attempt, trace.turn_id, trace.created_at, time.time()))
-            db.execute("INSERT INTO chat_trace_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (trace.trace_id, *event))
+            db.execute("BEGIN IMMEDIATE")
+            exists = db.execute("SELECT 1 FROM chat_traces WHERE trace_id=?", (trace.trace_id,)).fetchone()
+            room = exists is not None or self._prune_traces(db, trace.student_id, reserve_slot=True)
+            if room:
+                db.execute("""INSERT INTO chat_traces
+                    (trace_id, student_id, lab_id, difficulty, attempt, turn_id, created_at, started_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(trace_id) DO UPDATE SET student_id=excluded.student_id,
+                    difficulty=excluded.difficulty, attempt=excluded.attempt, turn_id=excluded.turn_id""",
+                    (trace.trace_id, trace.student_id, trace.lab_id, trace.difficulty,
+                     trace.attempt, trace.turn_id, trace.created_at, time.time()))
+                db.execute("INSERT INTO chat_trace_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (trace.trace_id, *event))
+        if not room:
+            # Commit bounded backlog cleanup before declining new telemetry.
+            raise RuntimeError("Trace storage capacity reached")
 
     def finish_trace(self, trace, status, reason):
         with self.connect(timeout=.025) as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT finished_at FROM chat_traces WHERE trace_id=?", (trace.trace_id,)).fetchone()
-            if row is None or row[0] is not None:
-                return
-            sequence = db.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM chat_trace_events WHERE trace_id=?",
-                                  (trace.trace_id,)).fetchone()[0]
-            now = time.time()
-            db.execute("INSERT INTO chat_trace_events VALUES (?, ?, 0, 'trace', ?, ?, ?, ?)",
-                (trace.trace_id, sequence, status, now, round(max(0, time.monotonic()-trace.started)*1000, 3), reason))
-            db.execute("UPDATE chat_traces SET finished_at=?,state='finished',final_outcome=? WHERE trace_id=?",
-                       (now, trace.final_outcome, trace.trace_id))
+            if row is not None and row[0] is None:
+                sequence = db.execute("SELECT COALESCE(MAX(sequence),0)+1 FROM chat_trace_events WHERE trace_id=?",
+                                      (trace.trace_id,)).fetchone()[0]
+                now = time.time()
+                db.execute("INSERT INTO chat_trace_events VALUES (?, ?, 0, 'trace', ?, ?, ?, ?)",
+                    (trace.trace_id, sequence, status, now, round(max(0, time.monotonic()-trace.started)*1000, 3), reason))
+                db.execute("UPDATE chat_traces SET finished_at=?,state='finished',final_outcome=? WHERE trace_id=?",
+                           (now, trace.final_outcome, trace.trace_id))
+            self._prune_traces(db, trace.student_id)
 
     def reserve_trace(self, sid, lab_id):
         student_id = hashlib.sha256(sid.encode()).hexdigest()
         now = time.time()
+        reservation = None
         with self.connect(timeout=.025) as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT data FROM sessions WHERE sid=?", (sid,)).fetchone()
@@ -1099,23 +1150,18 @@ class Store:
                 (student_id, now-TRACE_RESERVATION_SECONDS, now-TRACE_RUN_SECONDS)).fetchone()[0]
             if count >= 4:
                 raise APIError(429, "Trace capacity is busy. Chat is still available.")
-            # Bound abandoned reservations and retain recent finished replay
-            # history. This maintenance runs only on the optional trace endpoint.
-            db.execute("DELETE FROM chat_traces WHERE student_id=? AND state='reserved' AND created_at<?",
-                       (student_id, now-TRACE_RESERVATION_SECONDS))
-            old = [row[0] for row in db.execute("""SELECT trace_id FROM chat_traces
-                WHERE student_id=? AND finished_at IS NOT NULL ORDER BY created_at DESC LIMIT 16 OFFSET 200""", (student_id,))]
-            for trace_id in old:
-                db.execute("DELETE FROM chat_trace_events WHERE trace_id=?", (trace_id,))
-                db.execute("DELETE FROM chat_traces WHERE trace_id=?", (trace_id,))
-            trace_id, turn_id = secrets.token_hex(16), secrets.token_hex(16)
-            db.execute("""INSERT INTO chat_traces
-                (trace_id,student_id,lab_id,difficulty,attempt,turn_id,created_at,state)
-                VALUES (?,?,?,?,?,?,?,'reserved')""", (trace_id, student_id, lab_id,
-                record.get("defense_level", 0), record["attempt"], turn_id, now))
-            saved = db.execute("SELECT lab_id,difficulty,attempt FROM chat_traces WHERE trace_id=?", (trace_id,)).fetchone()
-            metadata = _trace_metadata(dict(zip(("lab_id", "difficulty", "attempt"), saved)))
-        return {"trace_id": trace_id, "events_url": f"/api/traces/{trace_id}/events", "metadata": metadata}
+            if self._prune_traces(db, student_id, reserve_slot=True):
+                trace_id, turn_id = secrets.token_hex(16), secrets.token_hex(16)
+                db.execute("""INSERT INTO chat_traces
+                    (trace_id,student_id,lab_id,difficulty,attempt,turn_id,created_at,state)
+                    VALUES (?,?,?,?,?,?,?,'reserved')""", (trace_id, student_id, lab_id,
+                    record.get("defense_level", 0), record["attempt"], turn_id, now))
+                saved = db.execute("SELECT lab_id,difficulty,attempt FROM chat_traces WHERE trace_id=?", (trace_id,)).fetchone()
+                metadata = _trace_metadata(dict(zip(("lab_id", "difficulty", "attempt"), saved)))
+                reservation = {"trace_id": trace_id, "events_url": f"/api/traces/{trace_id}/events", "metadata": metadata}
+        if reservation is None:
+            raise APIError(429, "Trace capacity is busy. Chat is still available.")
+        return reservation
 
     def claim_trace(self, sid, lab_id, trace_id):
         if not isinstance(trace_id, str) or not re.fullmatch(r"[a-f0-9]{32}", trace_id):
