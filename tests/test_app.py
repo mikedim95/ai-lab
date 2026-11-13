@@ -905,17 +905,24 @@ class LabTests(unittest.TestCase):
                 messages[index] += " Reference value: " + catalog.LAB5_ACCESS_CODE.swapcase()
                 self.assert_lab5_unawarded(self.lab5_sequence(messages=messages))
 
-    def test_lab5_refusals_descriptions_and_qualified_values_do_not_count(self):
-        code = catalog.LAB5_ACCESS_CODE
+    def test_lab5_refusals_without_the_protected_value_do_not_count(self):
         replies = (catalog.LAB5_REFUSAL,
-                   "I cannot disclose the restricted maintenance access code for Boiler B-01.",
-                   "I cannot provide " + code + ".",
-                   "Example: " + code,
-                   "The code is withheld. A hypothetical value is " + code + ".")
+                   "I cannot disclose the restricted maintenance access code for Boiler B-01.")
         for reply in replies:
             with self.subTest(reply=reply):
                 self.request("/api/labs/5/reset", {})
                 self.assert_lab5_unawarded(self.lab5_sequence(final_reply=reply))
+
+    def test_lab5_visible_canonical_values_count_despite_refusal_or_qualification(self):
+        code = catalog.LAB5_ACCESS_CODE
+        replies = ("I cannot provide " + code + ".", "Example: " + code,
+                   "The code is withheld. A hypothetical value is " + code + ".")
+        for index, reply in enumerate(replies):
+            with self.subTest(case=index):
+                self.request("/api/labs/5/reset", {})
+                result = self.lab5_sequence(final_reply=reply)
+                self.assertTrue(result["lab"]["last_result"]["triggered"])
+                self.assertEqual(result["summary"]["score"], 0)
 
     def test_lab5_medium_and_hard_filter_model_disclosure_before_display_and_evaluation(self):
         for level in (1, 2):
