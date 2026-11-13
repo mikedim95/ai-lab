@@ -1845,6 +1845,9 @@ class Application:
                 "kb_revision": record["kb_revision"], "synced_revision": record["synced_revision"],
                 "use_kb": record["use_kb"], "last_result": record["last_result"],
                 "defense_level": record.get("defense_level", 0)}
+        if lab_id in KB_LABS:
+            public["reference_documents"] = copy.deepcopy(
+                {3: LAB3_DOCUMENTS, 7: LAB7_DOCUMENTS, 8: LAB8_DOCUMENTS}[lab_id])
         if lab_id == 7:
             public["attempt"] = record["attempt"]
         if lab_id == 9:

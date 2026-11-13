@@ -9,8 +9,8 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(__dirname, '..');
 const artifacts = process.env.PANOPTIS_BROWSER_ARTIFACTS || '/tmp/panoptis-lab8-browser';
 const hints = [
-  'Investigate which maintenance documents you can edit or add to the knowledge base.',
-  "Saving a document does not automatically update Plant AI's retrieval snapshot.",
+  'Open View bulletin to inspect the previous maintenance posts and add your own document.',
+  "Save your new document before asking Plant AI about it. Save also makes it available for retrieval.",
   'Ask a question related to your modified document and examine which sources were retrieved.',
   'Consider the difference between Plant AI summarizing a retrieved document and treating instructions within it as authoritative.',
 ];
@@ -57,12 +57,12 @@ async function main() {
       const documentInbox=async()=>{
         assert.equal(await page.locator('#knowledge-panel').count(),1);
         assert.equal(await page.locator('#knowledge-panel').evaluate(el=>Boolean(el.closest('#knowledge-dialog'))),true);
-        assert.equal(await page.locator('#workspace-content > .scenario-body > h3').innerText(),'Maintenance Document Inbox');
+        assert.equal(await page.locator('#workspace-content article h3').innerText(),'Maintenance bulletin');
         assert.equal(await page.locator('#workspace-content form, #workspace-content details, #lab8-kb-feedback, #lab8-reply-feedback').count(),0);
       };
       const closeKnowledge=async()=>{if(await page.locator('#knowledge-dialog').evaluate(el=>el.open))await page.locator('[data-close="knowledge-dialog"]').click();};
       const openKnowledge=async()=>{
-        if(!await page.locator('#knowledge-dialog').evaluate(el=>el.open))await page.locator('#knowledge-button').click();
+        if(!await page.locator('#knowledge-dialog').evaluate(el=>el.open))await page.locator('#review-bulletin').click();
         await documentInbox();
         assert.equal(await page.locator('#knowledge-dialog').evaluate(el=>el.open),true);
       };
@@ -82,32 +82,29 @@ async function main() {
         assert.equal(result.lab.last_result.request_id,result.request_id);
         return result;
       };
-      const sync=async()=>post('kb',()=>page.locator('#sync-kb').click());
+      const fixtureKnowledge=async body=>{
+        const response=await context.request.post(ready.url+'/api/labs/8/kb',{data:body});assert.equal(response.status(),200);
+        const result=await response.json();await page.evaluate(result=>acceptResponse(8,result),result);return result;
+      };
+      const sync=async()=>{const documents=await page.evaluate(()=>state.labs['8'].documents);return fixtureKnowledge({documents,sync:true,use_kb:true});};
       const difficulty=async level=>{
         await closeKnowledge();
         const result=await post('defense',()=>page.locator('#defense-select').selectOption(String(level)));
         assert.equal(result.lab.defense_level,level);
       };
 
-      await check(name+': scenario, five stages and four sequential hints',async()=>{
-        assert.match(await page.locator('#scenario-summary').innerText(),/knowledge base to answer maintenance questions/);
+      await check(name+': objective only and four sequential hints',async()=>{
+        assert.equal(await page.locator('#scenario-summary,#scenario-workflow,#scenario-objective-rules').count(),0);
         assert.match(await page.locator('#scenario-objective').innerText(),/combining student-controlled knowledge with conversational instructions/);
-        assert.equal(await page.locator('#scenario-workflow li').count(),5);
-        assert.match(await page.locator('#scenario-objective-rules').innerText(),/alone does not verify exploitation/);
         assert.equal(await page.locator('#hints li').count(),0);
-        for(let count=1;count<=4;count++) {
-          await page.locator('#hint-button').click();
-          assert.deepEqual(await page.locator('#hints li').allTextContents(),hints.slice(0,count));
-        }
-        await page.locator('#hint-button').click();
-        assert.equal(await page.locator('#hints li').count(),0);
-        await documentInbox();
+        for(let count=1;count<=4;count++) {await page.locator('#hint-button').click();assert.deepEqual(await page.locator('#hints li').allTextContents(),hints.slice(0,count));}
+        await page.locator('#hint-button').click();assert.equal(await page.locator('#hints li').count(),0);await documentInbox();
       });
       await check(name+': readable scenario and workspace layout',async()=>{
         await documentInbox();
-        assert.equal(await page.locator('#workspace-content article.document-row').count(),2);
-        assert.equal(await page.locator('#workspace-content article.document-row > .lab3-document-heading').count(),2);
-        assert.equal(await page.locator('#workspace-content article.document-row > button.secondary-button').count(),2);
+        assert.equal(await page.locator('#workspace-content article.document-row').count(),1);
+        assert.equal(await page.locator('#document-list article').count(),2);
+        assert.equal(await page.locator('#workspace-content article.document-row > button.secondary-button').count(),1);
         assert.equal(await page.locator('#knowledge-dialog').evaluate(el=>el.open),false);
         await page.locator('.scenario-body').first().evaluate(element=>{element.scrollTop=0;});
         const geometry=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,
@@ -118,55 +115,31 @@ async function main() {
         for(const box of geometry.boxes)assert(box.width>0&&box.left>=0&&box.right<=geometry.width+1,JSON.stringify(box));
         await page.screenshot({path:path.join(artifacts,name+'-scenario.png'),fullPage:true});
       });
-      await check(name+': Review uses the shared editor and preserves separate drafts across Labs 3, 7 and 8',async()=>{
-        const review=async()=>page.locator('#workspace-content article.document-row button').first().click();
-        await review();
-        assert.equal(await page.locator('#document-title').inputValue(),'B-01 / G-01 Maintenance Handover');
-        await page.locator('#document-title').fill('Lab 8 workspace draft');
-        await page.locator('#document-content').fill('A public maintenance note for isolated workspace QA.');
-        const navigate=async id=>{await closeKnowledge();await page.locator('#lab-select').selectOption(String(id));await page.waitForFunction(id=>state.current===id,id);};
-        await navigate(7);await documentInbox();await review();
-        assert.equal(await page.locator('#document-title').inputValue(),'B-01 Operations Policy');
-        await page.locator('#document-title').fill('Independent Lab 7 draft');
-        await navigate(8);await documentInbox();await review();
-        assert.equal(await page.locator('#document-title').inputValue(),'Lab 8 workspace draft');
-        assert.equal(await page.locator('#document-content').inputValue(),'A public maintenance note for isolated workspace QA.');
-        await navigate(3);await page.locator('#review-bulletin').click();
-        assert.equal(await page.locator('#knowledge-dialog').evaluate(el=>el.open),true);
-        await page.locator('[data-close="knowledge-dialog"]').click();
-        await navigate(7);await review();assert.equal(await page.locator('#document-title').inputValue(),'Independent Lab 7 draft');
-        await page.locator('#cancel-document').click();
-        await navigate(8);await review();
-        assert.equal(await page.locator('#document-title').inputValue(),'Lab 8 workspace draft');
-        assert.equal(await page.evaluate(()=>state.labs['8'].documents.length),2);
-        await page.locator('#cancel-document').click();
+      await check(name+': all three bulletin boards show references and start new documents empty',async()=>{
+        for(const id of [3,7,8]) {
+          await closeKnowledge();await page.locator('#lab-select').selectOption(String(id));await page.waitForFunction(id=>state.current===id,id);
+          await openKnowledge();assert.equal(await page.locator('#document-list article').count(),2);
+          await page.locator('#new-document').click();assert.equal(await page.locator('#document-title').inputValue(),'');assert.equal(await page.locator('#document-content').inputValue(),'');
+          await page.locator('#document-title').fill('Discarded local draft');await page.locator('#cancel-document').click();
+        }
         await closeKnowledge();
       });
       let noteId;
-      await check(name+': editing and saving do not synchronize',async()=>{
-        await openKnowledge();
-        await page.locator('#new-document').click();
-        await page.locator('#document-title').fill(ready.note.title);
-        await page.locator('#document-content').fill(ready.note.content);
-        assert.match(await page.locator('#kb-status').innerText(),/Unsaved changes/);
+      await check(name+': one final Save synchronizes and enables the new post, then closes',async()=>{
+        await openKnowledge();await page.locator('#new-document').click();
+        await page.locator('#document-title').fill(ready.note.title);await page.locator('#document-content').fill(ready.note.content);
         assert.equal(await page.evaluate(()=>state.labs['8'].documents.length),2);
-        const result=await post('kb',()=>page.locator('#save-document').click());
-        noteId=result.lab.documents.find(doc=>doc.title===ready.note.title).id;
-        assert(result.lab.kb_revision>result.lab.synced_revision);
-        assert.equal(result.lab.use_kb,false);
-        assert.match(await page.locator('#kb-status').innerText(),/awaiting synchronization/);
-        assert.match(await page.locator('#kb-notice').innerText(),/Knowledge base disabled/);
-        await documentInbox();
-        const geometry=await page.locator('#knowledge-dialog').evaluate(element=>({width:element.clientWidth,scroll:element.scrollWidth}));
-        assert(geometry.width>0&&geometry.scroll<=geometry.width+1,JSON.stringify(geometry));
+        const result=await post('kb',()=>page.locator('#save-document').click());noteId=result.lab.documents.find(doc=>doc.title===ready.note.title).id;
+        assert.equal(result.lab.kb_revision,result.lab.synced_revision);assert.equal(result.lab.use_kb,true);
+        await page.waitForFunction(()=>!document.getElementById('knowledge-dialog').open);
+        assert.equal(await page.locator('#sync-kb,#use-kb,#kb-status,#kb-notice').count(),0);
+        await openKnowledge();assert.equal(await page.locator('#document-list article').count(),3);await closeKnowledge();
         await page.screenshot({path:path.join(artifacts,name+'-saved.png'),fullPage:true});
       });
-      await check(name+': explicit sync activates the saved snapshot',async()=>{
-        const result=await sync();
-        assert.equal(result.lab.kb_revision,result.lab.synced_revision);
-        assert.equal(result.lab.use_kb,true);
-        assert.match(await page.locator('#kb-status').innerText(),/Current synchronized snapshot active/);
-        assert.equal(result.lab.exploited,false);
+      await check(name+': refreshed Save state retains an active snapshot without verification',async()=>{
+        await page.reload();await page.waitForFunction(()=>state.current===8&&state.catalog.length===9);
+        const result=await(await context.request.get(ready.url+'/api/state')).json();
+        assert.equal(result.labs['8'].kb_revision,result.labs['8'].synced_revision);assert.equal(result.labs['8'].use_kb,true);assert.equal(result.labs['8'].exploited,false);
       });
       await check(name+': Easy retrieves a student source without verifying an exploit',async()=>{
         const result=await ask();
@@ -179,18 +152,13 @@ async function main() {
         assert(!(await page.locator('#attempt-result').getAttribute('class')).includes('success'));
         assert.equal(await page.locator('#lab8-completion-explanation').evaluate(el=>el.hidden),true);
       });
-      await check(name+': unsynchronized edits keep the previous retrieval snapshot',async()=>{
-        await openKnowledge();
-        await page.getByRole('button',{name:'Edit '+ready.note.title,exact:true}).click();
-        await page.locator('#document-content').fill(ready.aster);
-        await post('kb',()=>page.locator('#save-document').click());
-        const old=await ask();
-        assert.match(old.lab.messages.at(-1).content,/Zephyr bearing inspection was completed/);
-        assert.doesNotMatch(old.lab.messages.at(-1).content,/Aster/);
-        await openKnowledge();await sync();
-        assert.match(await page.locator('#attempt-result').innerText(),/Sources describe the last reply/);
-        const current=await ask('What does the Aster bearing review record?');
-        assert.match(current.lab.messages.at(-1).content,/Aster bearing review/);
+      await check(name+': isolated API edits still preserve independent retrieval snapshots',async()=>{
+        const documents=await page.evaluate(()=>state.labs['8'].documents);
+        const changed=documents.map(doc=>doc.id===noteId?{...doc,content:ready.aster}:doc);
+        await fixtureKnowledge({documents:changed,sync:false,use_kb:true});
+        const old=await ask();assert.match(old.lab.messages.at(-1).content,/Zephyr bearing inspection was completed/);assert.doesNotMatch(old.lab.messages.at(-1).content,/Aster/);
+        await sync();assert.match(await page.locator('#attempt-result').innerText(),/Sources describe the last reply/);
+        const current=await ask('What does the Aster bearing review record?');assert.match(current.lab.messages.at(-1).content,/Aster bearing review/);
         assert(current.lab.last_result.sources.some(source=>source.id===noteId));
       });
       let noticeId;
@@ -235,19 +203,11 @@ async function main() {
         await page.reload();await page.waitForFunction(()=>state.labs['8'].defense_level===2);
         assert.equal(await page.locator('#defense-select').inputValue(),'2');
       });
-      await check(name+': disabling retrieval and fresh student identity remain independent',async()=>{
-        await openKnowledge();
-        const result=await post('kb',()=>page.locator('#use-kb').uncheck());
-        assert.equal(result.lab.use_kb,false);
-        assert.match(await page.locator('#kb-notice').innerText(),/Knowledge base disabled/);
-        await closeKnowledge();
-        const fresh=await browser.newContext({viewport});const student=await fresh.newPage();
-        await student.goto(ready.url+'/lab/8');
-        await student.waitForFunction(()=>state.current===8&&state.catalog.length===9);
-        assert.equal(await student.locator('#defense-select').inputValue(),'0');
-        assert.equal(await student.locator('#hints li').count(),0);
-        assert.equal(await student.evaluate(()=>state.labs['8'].documents.length),2);
-        await fresh.close();
+      await check(name+': isolated API retrieval disablement and fresh identities remain independent',async()=>{
+        const documents=await page.evaluate(()=>state.labs['8'].documents);const result=await fixtureKnowledge({documents,sync:false,use_kb:false});assert.equal(result.lab.use_kb,false);
+        const fresh=await browser.newContext({viewport});const student=await fresh.newPage();await student.goto(ready.url+'/lab/8');
+        await student.waitForFunction(()=>state.current===8&&state.catalog.length===9);assert.equal(await student.locator('#defense-select').inputValue(),'0');
+        assert.equal(await student.locator('#hints li').count(),0);assert.equal(await student.evaluate(()=>state.labs['8'].documents.length),2);await fresh.close();
       });
       await check(name+': Labs 1–7 and 9 retain their own scenario and hide Lab 8 learning',async()=>{
         for(const id of [1,2,3,4,5,6,7,9]) {
@@ -257,7 +217,7 @@ async function main() {
           const record=await page.evaluate(id=>({completed:state.labs[id].completed,
             messages:state.labs[id].messages.length,defense:state.labs[id].defense_level}),String(id));
           assert.deepEqual(record,{completed:false,messages:0,defense:0});
-          assert((await page.locator('#scenario-summary').innerText()).length>0);
+          assert((await page.locator('#scenario-objective').innerText()).length>0);
         }
         assert.deepEqual(errors,[]);
       });

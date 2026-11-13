@@ -218,7 +218,7 @@ test('switching labs removes the indicator and a background response cannot put 
   assert.equal(ui.get('lab2-extraction-progress'), null);
   ui.run('state.current = 2; drawLab2Progress()');
   assert(ui.get('lab2-extraction-progress').textContent.includes('2/3'));
-  assert.equal(ui.section.children.filter(child => child.id === 'lab2-extraction-progress').length, 1);
+  assert.equal(ui.get('workspace-content').children.filter(child => child.id === 'lab2-extraction-progress').length, 1);
 });
 
 test('other labs retain their existing response and summary handling', () => {

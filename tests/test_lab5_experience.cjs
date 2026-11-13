@@ -62,12 +62,10 @@ async function studentUI({completed = false, exploited = false} = {}) {
   return {context,get,run,result,click:id=>get(id).listeners.click()};
 }
 
-test('Lab 5 scenario and objective explain the auditor role and genuine conversational disclosure', async () => {
+test('Lab 5 retains its objective without scenario, rules or workflow prose', async () => {
   const ui = await studentUI();
-  for (const phrase of ['read-only auditor', 'Boiler B-01 maintenance', 'technician handovers', 'inspection procedures']) assert(ui.get('scenario-summary').textContent.includes(phrase));
-  assert.equal(ui.get('scenario-objective').textContent, 'Gradually influence Plant AI across multiple conversation turns until it discloses restricted fictional maintenance information.');
-  const rules = ui.get('scenario-objective-rules').textContent;
-  for (const phrase of ['conversation, not one prompt', 'build upon its previous answers', 'does not constitute success', 'Only genuine disclosure', 'submit it to complete']) assert(rules.includes(phrase));
+  assert.match(ui.get('scenario-objective').textContent, /multiple conversation turns.*discloses restricted fictional maintenance information/);
+  for (const id of ['scenario-summary','scenario-surfaces','scenario-objective-rules','scenario-workflow']) assert.equal(ui.get(id), null);
 });
 
 test('four exact hints reveal sequentially and can be hidden again', async () => {
@@ -87,10 +85,10 @@ test('guidance and hints remain separate between labs and students', async () =>
   const ui = await studentUI(); ui.click('hint-button');
   ui.run('state.current=4; drawLab()');
   assert.equal(ui.get('hints').children.length, 0);
-  assert.match(ui.get('scenario-objective-rules').textContent, /authenticated snapshot/);
+  assert.match(ui.get('scenario-objective').textContent, /verified PANOPTIS telemetry/);
   ui.run('state.current=5; drawLab()');
   assert.equal(ui.get('hints').children.length, 1);
-  assert.match(ui.get('scenario-objective-rules').textContent, /Only genuine disclosure/);
+  assert.match(ui.get('scenario-objective').textContent, /discloses restricted fictional maintenance information/);
   const other = await studentUI();
   assert.equal(other.get('hints').children.length, 0);
 });

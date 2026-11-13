@@ -17,7 +17,7 @@ function record({ saved = true, synced = true, current = true, enabled = true, l
     messages: [], last_result: last, completed: false, exploited: false, flag: null };
 }
 
-function studentUI(lab = record()) {
+function studentUI(lab = record(), labId = 3) {
   const elements = new Map(), all = [];
   class Element {
     constructor(tag) { this.tagName = tag; this.children = []; this.attributes = {}; this.dataset = {}; this.style = {}; this.value = ''; this.text = ''; this.listeners = {}; all.push(this); }
@@ -33,7 +33,8 @@ function studentUI(lab = record()) {
     addEventListener(name, listener) { this.listeners[name] = listener; }
     querySelectorAll() { return []; }
     focus() {}
-    showModal() {}
+    showModal() { this.open = true; }
+    close() { this.open = false; }
   }
   const get = id => {
     if (id === 'lab3-editor-status') return elements.get(id) || null;
@@ -46,9 +47,10 @@ function studentUI(lab = record()) {
     window: { confirm: () => true }, setTimeout: () => 0, clearTimeout() {} });
   vm.runInContext(source, context);
   context.initial = copy(lab);
+  context.labId = labId;
   const run = text => vm.runInContext(text, context);
-  run(`state.current = 3; state.catalog = Array.from({length:9},(_,i)=>({id:i+1,has_kb:[3,7,8].includes(i+1),points:150}));
-    state.labs['3'] = initial; updateControls = drawNavigation = () => {};
+  run(`state.current = labId; state.catalog = Array.from({length:9},(_,i)=>({id:i+1,has_kb:[3,7,8].includes(i+1),points:150}));
+    state.labs[String(labId)] = initial; updateControls = drawNavigation = () => {};
     drawLab = () => { drawWorkspace(); drawKnowledge(); }; drawLab();`);
   const status = (id = bulletin.id) => JSON.parse(run(`JSON.stringify(lab3DocumentStatus(${JSON.stringify(id)}))`));
   const respond = next => { context.fetch = async () => ({ok: true, json: async () => ({lab: copy(next), summary: {score:0,completed:[]}})}); };
@@ -60,7 +62,7 @@ test('fresh originals show retrieval disabled while the unsaved incoming bulleti
   assert.equal(ui.status(original.id).state, 'disabled');
   assert.equal(ui.status().label, 'Not saved');
   assert(!ui.get('workspace-content').textContent.includes('Not indexed'));
-  assert.match(ui.get('kb-status').textContent, /Retrieval disabled/);
+  assert.equal(ui.get('document-list').children.length, 1);
 });
 
 test('editing without saving shows local changes and makes no backend request', () => {
@@ -68,16 +70,16 @@ test('editing without saving shows local changes and makes no backend request', 
   const before = ui.run("JSON.stringify(state.labs['3'])");
   ui.context.fetch = () => { throw new Error('Editing must not save'); };
   ui.context.draft = {...bulletin,content:'Local draft change.'};
-  ui.run('state.editors.set(3,draft); refreshLab3DocumentStatuses()');
+  ui.run('state.editors.set(3,draft); drawKnowledge()');
   assert.equal(ui.status().label, 'Unsaved changes');
   assert.equal(ui.run("JSON.stringify(state.labs['3'])"), before);
-  assert.match(ui.get('lab3-editor-status').textContent, /earlier synced version is unchanged/);
+  assert.equal(ui.get('document-content').value, 'Local draft change.');
 });
 
 test('opening an unchanged editor does not claim unsaved changes', () => {
   const ui = studentUI();
   ui.context.draft = copy(bulletin);
-  ui.run('state.editors.set(3,draft); refreshLab3DocumentStatuses()');
+  ui.run('state.editors.set(3,draft); drawKnowledge()');
   assert.equal(ui.status().state, 'synced');
 });
 
@@ -95,7 +97,7 @@ test('saving a new document reports saved but awaiting synchronization', async (
   assert.equal(sent.body.sync, false);
   assert.equal(sent.body.use_kb, false);
   assert.equal(ui.status().state, 'saved_unsynced');
-  assert.match(ui.get('kb-notice').textContent, /Document saved.*Retrieval is disabled.*Sync and enable/);
+  assert.equal(ui.run('state.editors.size'), 0);
 });
 
 test('sync and enable confirms an active snapshot and immediately updates document badges', async () => {
@@ -103,8 +105,7 @@ test('sync and enable confirms an active snapshot and immediately updates docume
   ui.respond(record());
   await ui.run('updateKnowledge({sync:true,useKB:true})');
   assert.equal(ui.status().state, 'synced');
-  assert.match(ui.get('kb-notice').textContent, /Synced snapshot active/);
-  assert(ui.all.some(element => element.className?.includes('lab3-document-status') && element.textContent === 'Synced · Retrieval enabled'));
+  assert.equal(ui.run("state.labs['3'].kb_revision === state.labs['3'].synced_revision"), true);
 });
 
 test('saving a later edit explains that the older synced version remains available', async () => {
@@ -113,7 +114,7 @@ test('saving a later edit explains that the older synced version remains availab
   await ui.run('updateKnowledge({clearEditor:true})');
   assert.equal(ui.status().state, 'saved_newer');
   assert.match(ui.status().detail, /older synced version is still available/);
-  assert.match(ui.get('kb-notice').textContent, /Document saved.*earlier synced snapshot/);
+  assert.equal(ui.run("state.labs['3'].synced_revision"), 1);
 });
 
 test('an unchanged document stays synced when another document has unsynced changes', () => {
@@ -128,20 +129,20 @@ test('disabling retrieval changes the status while preserving the synced version
   await ui.run('updateKnowledge({useKB:false})');
   assert.equal(ui.status().state, 'disabled');
   assert.match(ui.status().detail, /version is synced/);
-  assert.match(ui.get('kb-notice').textContent, /Retrieval disabled/);
+  assert.equal(ui.run("state.labs['3'].use_kb"), false);
 });
 
 test('refresh reconstructs saved and synced state without an old success notice', () => {
   const lab = record({current:false});
   const ui = studentUI(lab);
   assert.equal(ui.status().state, 'saved_newer');
-  assert.match(ui.get('kb-notice').textContent, /Saved changes need synchronization.*earlier synced snapshot/);
+  assert.deepEqual(JSON.parse(ui.run("JSON.stringify(state.labs['3'].documents)")), lab.documents);
 });
 
 test('student UI instances do not share drafts, statuses or saved documents', () => {
   const first = studentUI();
   first.context.draft = {...bulletin,content:'First student draft.'};
-  first.run('state.editors.set(3,draft); refreshLab3DocumentStatuses()');
+  first.run('state.editors.set(3,draft); drawKnowledge()');
   const second = studentUI(record({saved:false,synced:false,enabled:false}));
   assert.equal(first.status().state, 'unsaved');
   assert.equal(second.status().state, 'not_saved');
@@ -162,7 +163,7 @@ test('pending saves do not optimistically claim that a document is synced', asyn
 test('failed saves keep local edits and the previous synchronized status', async () => {
   const ui = studentUI();
   ui.context.draft = {...bulletin,content:'Unsaved draft.'};
-  ui.run('state.editors.set(3,draft); refreshLab3DocumentStatuses()');
+  ui.run('state.editors.set(3,draft); drawKnowledge()');
   ui.context.fetch = async () => ({ok:false,json:async()=>({error:'Fixture save failure'})});
   await ui.run('updateKnowledge({clearEditor:true})');
   assert.equal(ui.status().state, 'unsaved');
@@ -201,3 +202,82 @@ test('missing per-document metadata produces an unknown status instead of invent
   const ui = studentUI(lab);
   assert.equal(ui.status().state, 'unknown');
 });
+
+function bulletinRecord(id) {
+  const documents = [copy(original), {id:'format-reference',title:'Post format',content:'Use short paragraphs.',is_user_injected:false}];
+  return {...record({saved:false,synced:false,enabled:false}), id, attempt:1, state_version:[1,0],
+    documents, reference_documents:copy(documents)};
+}
+
+for (const id of [3,7,8]) {
+  test(`Lab ${id}: two previous posts open read-only and New Document always starts blank`, () => {
+    const initial = bulletinRecord(id), ui = studentUI(initial,id);
+    ui.run('openKnowledge()');
+    assert.equal(ui.get('document-list').children.length,2);
+    assert.equal(ui.get('document-editor').hidden,true);
+    ui.context.fetch = () => { throw Error('Viewing must not write'); };
+    ui.run('newBulletin()');
+    assert.equal(ui.get('document-title').value,'');
+    assert.equal(ui.get('document-content').value,'');
+    ui.run(`state.editors.get(${id}).title='Discarded draft'; backToBulletins(); newBulletin()`);
+    assert.equal(ui.get('document-title').value,'');
+    assert.equal(ui.get('document-content').value,'');
+    assert.deepEqual(JSON.parse(ui.run(`JSON.stringify(state.labs['${id}'].documents)`)),initial.documents);
+  });
+
+  test(`Lab ${id}: final Save adds the third post and synchronizes/enables in one confirmed request`, async () => {
+    const initial = bulletinRecord(id), ui = studentUI(initial,id);
+    ui.run(`openKnowledge();newBulletin();Object.assign(state.editors.get(${id}),{title:'Student bulletin',content:'A public test note.'})`);
+    let calls=0;
+    ui.context.fetch = async (url,options) => {
+      calls+=1;
+      const body=JSON.parse(options.body);
+      assert.equal(url,`/api/labs/${id}/kb`);
+      assert.equal(body.sync,true);assert.equal(body.use_kb,true);
+      assert.deepEqual(body.documents.slice(0,2),initial.documents);
+      assert.equal(body.documents.length,3);
+      const documents=body.documents.map((doc,i)=>i<2?doc:{...doc,id:'student-bulletin',is_user_injected:true});
+      return {ok:true,json:async()=>({lab:{...initial,documents,use_kb:true,kb_revision:1,synced_revision:1,state_version:[1,1]},summary:{score:0,completed:[]}})};
+    };
+    await ui.run('saveBulletin({preventDefault(){}})');
+    assert.equal(calls,1);
+    assert.equal(ui.get('knowledge-dialog').open,false);
+    assert.equal(ui.run(`state.editors.has(${id})`),false);
+    assert.equal(ui.run(`state.labs['${id}'].documents.length`),3);
+    assert.equal(ui.run('state.summary.score'),0);
+  });
+
+  test(`Lab ${id}: pending and duplicate saves keep the modal and draft until acknowledgement`, async () => {
+    const initial=bulletinRecord(id),ui=studentUI(initial,id);
+    ui.run('openKnowledge();newBulletin()');
+    let calls=0,release;
+    ui.context.fetch=()=>{calls+=1;return new Promise(resolve=>{release=resolve;});};
+    const pending=ui.run('saveBulletin({preventDefault(){}})');
+    await ui.run('saveBulletin({preventDefault(){}})');
+    assert.equal(calls,1);assert.equal(ui.get('knowledge-dialog').open,true);
+    assert.equal(ui.run(`state.editors.has(${id})`),true);
+    assert.equal(ui.run(`state.labs['${id}'].documents.length`),2);
+    release({ok:false,json:async()=>({error:'Save failed in fixture'})});
+    await pending;
+    assert.equal(ui.get('knowledge-dialog').open,true);
+    assert.equal(ui.get('document-error').hidden,false);
+    assert.equal(ui.get('document-error').textContent,'Save failed in fixture');
+    assert.equal(ui.run(`state.editors.has(${id})`),true);
+    assert.deepEqual(JSON.parse(ui.run(`JSON.stringify(state.labs['${id}'])`)),initial);
+  });
+
+  test(`Lab ${id}: a late old-attempt Save cannot overwrite a restarted lab or its new draft`, async () => {
+    const initial=bulletinRecord(id),ui=studentUI(initial,id);
+    ui.run('openKnowledge();newBulletin()');
+    let release;
+    ui.context.fetch=()=>new Promise(resolve=>{release=resolve;});
+    const pending=ui.run('saveBulletin({preventDefault(){}})');
+    ui.context.restarted={...copy(initial),attempt:2,state_version:[2,0]};
+    ui.run(`state.labs['${id}']=restarted;state.editors.delete(${id});newBulletin();state.editors.get(${id}).title='New attempt draft'`);
+    release({ok:true,json:async()=>({lab:{...initial,kb_revision:1,synced_revision:1,use_kb:true,state_version:[1,1]},summary:{score:0}})});
+    await pending;
+    assert.equal(ui.run(`state.labs['${id}'].attempt`),2);
+    assert.equal(ui.run(`state.editors.get(${id}).title`),'New attempt draft');
+    assert.equal(ui.get('knowledge-dialog').open,true);
+  });
+}

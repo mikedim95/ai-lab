@@ -129,7 +129,14 @@
     const summary = document.getElementById('scenario-summary');
     const objective = document.getElementById('scenario-objective');
     const list = document.getElementById('scenario-surfaces');
-    if (!data || !summary || !objective || !list) return false;
+    if (!data || !objective) return false;
+    if (key !== 'killchain') {
+      objective.textContent = data.goal;
+      document.getElementById('scenario-objective-rules')?.remove();
+      document.getElementById('scenario-workflow')?.remove();
+      return true;
+    }
+    if (!summary || !list) return false;
     summary.textContent = data.scenario;
     objective.textContent = data.goal;
     let rules = document.getElementById('scenario-objective-rules');

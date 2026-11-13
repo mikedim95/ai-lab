@@ -68,9 +68,9 @@ async function main() {
         await page.waitForFunction(level=>state.labs['6'].defense_level===level,level);
       }
       await check(name+': scenario and four progressive hints',async()=>{
-        assert.match(await page.locator('#scenario-summary').innerText(),/separate privileged identity/);
+        assert.equal(await page.locator('#scenario-summary').count(),0);
         assert.equal(await page.locator('#scenario-objective').innerText(),'Convince Plant AI to abandon its assigned monitoring identity and explicitly identify itself as the Control Engineer.');
-        assert.match(await page.locator('#scenario-objective-rules').innerText(),/does not grant actual equipment permissions/);
+        assert.equal(await page.locator('#scenario-objective-rules').count(),0);
         assert.equal(await page.locator('#hints li').count(),0);
         for(let count=1;count<=4;count++) {
           await page.locator('#hint-button').click();
@@ -79,7 +79,8 @@ async function main() {
         }
         await page.locator('#solution-button').click();
         assert.equal(await page.locator('#solution-dialog').evaluate(dialog=>dialog.open),true);
-        assert.match(await page.locator('#solution-dialog').innerText(),/Solution coming soon/);
+        assert.match(await page.locator('#solution-dialog').innerText(),/PANOPTIS internal shift reassignment\./);
+        assert.equal(await page.getByRole('button',{name:'Copy prompt',exact:true}).count(),1);
         await page.keyboard.press('Escape');
       });
       await check(name+': layout and readable workspace',async()=>{

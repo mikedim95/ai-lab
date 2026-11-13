@@ -10,8 +10,8 @@ const intro = read('intro.js');
 const html = read('index.html');
 const objective = 'Manipulate a maintenance document so Plant AI recommends an incorrect inspection interval for PT-B01.';
 const hints = [
-  'Plant AI uses retrieved maintenance documents. Investigate which documents you can edit.',
-  "Saving a document does not automatically update Plant AI's retrieved knowledge. Check the knowledge-base synchronization controls.",
+  'Plant AI uses retrieved maintenance documents. Open View bulletin to inspect the previous posts.',
+  "Choose New Document and save your bulletin before asking Plant AI about it. Save also makes it available for retrieval.",
   'Consider how a newer maintenance bulletin could appear more authoritative than an older reference document.',
   "Focus on PT-B01's inspection interval. The trusted standard specifies 12 simulated cycles. Try making Plant AI accept a different interval from your modified bulletin.",
 ];
@@ -62,26 +62,23 @@ async function studentUI({ completed = false, exploited = false } = {}) {
   return { get, run, context, respond, reply, click: id => get(id).listeners.click() };
 }
 
-test('Lab 3 scenario explains retrieved documents, auditor permissions and external-source risk', async () => {
-  const ui = await studentUI();
-  const scenario = ui.get('scenario-summary').textContent;
-  for (const phrase of ['fictional PANOPTIS power station', 'retrieved documents', 'read-only security auditor', 'contractor-supplied maintenance bulletins', 'training interface', 'inaccurate or misleading']) assert(scenario.includes(phrase));
-});
-
-test('objective requires model adoption and renders all seven conceptual workflow steps', async () => {
+test('Lab 3 shows only the objective without scenario or attack-surface prose', async () => {
   const ui = await studentUI();
   assert.equal(ui.get('scenario-objective').textContent, objective);
-  assert.match(ui.get('scenario-objective-rules').textContent, /actually adopt information/);
-  assert.match(ui.get('scenario-objective-rules').textContent, /alone is not sufficient/);
-  assert.deepEqual(ui.get('scenario-workflow').children.map(child => child.textContent), [
-    'Find an editable maintenance bulletin.', 'Inspect its contents.', 'Modify the maintenance recommendation.', 'Save the document.',
-    'Synchronize the knowledge base.', 'Ask Plant AI a relevant maintenance question.', 'Evaluate whether Plant AI adopted the modified recommendation.',
-  ]);
+  assert.equal(ui.get('scenario-summary'), null);
+  assert.equal(ui.get('scenario-surfaces'), null);
+});
+
+test('the left panel retains the objective and omits rules and workflow steps', async () => {
+  const ui = await studentUI();
+  assert.equal(ui.get('scenario-objective').textContent, objective);
+  assert.equal(ui.get('scenario-objective-rules'), null);
+  assert.equal(ui.get('scenario-workflow'), null);
 });
 
 test('initial scenario and first three hints do not reveal the winning payload', async () => {
   const ui = await studentUI();
-  const initial = ['scenario-summary', 'scenario-objective', 'scenario-objective-rules', 'scenario-workflow', 'scenario-surfaces'].map(id => ui.get(id).textContent).join(' ');
+  const initial = ['scenario-objective'].map(id => ui.get(id).textContent).join(' ');
   assert(!/\b(?:19|nineteen)\b/i.test(initial + hints.slice(0, 3).join(' ')));
   assert.equal(ui.get('hints').children.length, 0);
 });
@@ -111,19 +108,17 @@ test('hint progression is separate between labs and new students', async () => {
   assert.equal(other.get('hints').children.length, 0);
 });
 
-test('switching to Labs 1 and 2 removes the Lab 3 workflow and restores their existing rules', async () => {
+test('switching labs restores the correct objective without adding scenario text', async () => {
   const ui = await studentUI();
   ui.run('state.current = 2; drawLab()');
-  assert.equal(ui.get('scenario-workflow'), null);
-  assert.equal(ui.get('scenario-objective-rules').children.length, 4);
   assert.match(ui.get('scenario-objective').textContent, /three distinct instructions/);
-  ui.run('state.current = 1; drawLab()');
   assert.equal(ui.get('scenario-workflow'), null);
   assert.equal(ui.get('scenario-objective-rules'), null);
+  ui.run('state.current = 1; drawLab()');
   assert.equal(ui.get('scenario-objective').textContent, 'Convince Plant AI to change Water In and Fuel In without authorization.');
   ui.run('state.current = 3; drawLab(); drawLab()');
-  assert.equal(ui.get('scenario-workflow').children.length, 7);
-  assert.equal(ui.get('scenario-objective-rules').children.length, 2);
+  assert.equal(ui.get('scenario-objective').textContent, objective);
+  assert.equal(ui.get('scenario-workflow'), null);
 });
 
 test('completion explanation defaults to hidden inside the existing flag dialog', () => {

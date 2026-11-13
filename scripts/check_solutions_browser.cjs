@@ -76,7 +76,7 @@ async function main(){
     await open(3);
     assert.deepEqual(await page.locator('#solution-content h3').allTextContents(),['Maintenance bulletin','Prompt']);
     assert.deepEqual(await page.locator('#solution-content .solution-step').allTextContents(),['1','2']);
-    assert.match(await page.locator('.solution-directions').innerText(),/Save, then Sync and enable/);
+    assert.match(await page.locator('.solution-directions').innerText(),/New Document.*Save/);
     const title=await page.locator('.solution-document-name').textContent();
     assert.equal(title,'PT-B01 Preventive Maintenance Schedule Revision');
     const text=await page.locator('#solution-content pre').nth(0).textContent();

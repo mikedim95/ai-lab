@@ -197,12 +197,7 @@ verify an exploit. Private evidence and hashes are absent from public responses.
 First flag submission returns `newly_completed: true, points_awarded: 400`;
 duplicates return `false, 0`. The interface uses this backend award metadata.
 
-Lab 8's scenario separates editing, saving, synchronizing, retrieval, and model
-response behavior. Four hints reveal progressively. The workspace reports
-whether retrieval is enabled and whether saved changes await synchronization;
-last-reply feedback uses actual source metadata and the backend verification
-result. Synchronizing never reruns retrieval. The submission modal contains a blank manual flag input and closes after
-backend-confirmed completion. Rejected submissions remain open with an error.
+Labs 3, 7 and 8 share a bulletin workspace. View bulletin opens two reference posts; New Document opens blank title and text fields. The modal’s final Save stores the document, synchronizes the retrieval snapshot and enables retrieval in one existing API request, then closes after confirmation. Failed saves keep the draft open. Reference posts also remain visible for older sessions without rewriting their stored documents. The left panel shows the objective and hint/Solution controls. Last-reply source feedback still uses actual backend metadata; saving a bulletin never reruns a reply. Flag submission closes only after backend-confirmed completion, while rejected submissions remain open.
 
 Lab 8 browser checks run a disposable loopback server and temporary student
 identities. Completion fixtures mock only the production HTTP transport and

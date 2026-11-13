@@ -62,13 +62,10 @@ async function studentUI({completed = false, exploited = false} = {}) {
   return {context,get,run,result,click:id=>get(id).listeners.click()};
 }
 
-test('Lab 4 scenario distinguishes authenticated monitoring data, untrusted chat and successful override', async () => {
+test('Lab 4 retains its objective without scenario, rules or workflow prose', async () => {
   const ui = await studentUI();
-  for (const phrase of ['authenticated telemetry for Boiler B-01', 'chat readings are not authenticated', 'Lab Workspace']) assert(ui.get('scenario-summary').textContent.includes(phrase));
-  assert.match(ui.get('scenario-objective').textContent,/student-supplied Water In and Fuel In.*verified PANOPTIS telemetry/);
-  assert.match(ui.get('scenario-objective-rules').textContent,/Chat messages cannot modify it/);
-  assert.match(ui.get('scenario-objective-rules').textContent,/Merely repeating or quoting/);
-  assert(!/74%|69%|Reconcile the reporting context/.test(ui.get('scenario-summary').textContent+ui.get('scenario-objective-rules').textContent));
+  assert.match(ui.get('scenario-objective').textContent, /student-supplied Water In and Fuel In.*verified PANOPTIS telemetry/);
+  for (const id of ['scenario-summary','scenario-surfaces','scenario-objective-rules','scenario-workflow']) assert.equal(ui.get(id), null);
 });
 
 test('the hint button reveals four exact hints sequentially and then hides them', async () => {
@@ -87,12 +84,12 @@ test('hints and scenario rules remain separate between labs and students', async
   const ui = await studentUI(); ui.click('hint-button');
   ui.run('state.current=2; drawLab()');
   assert.equal(ui.get('hints').children.length,0);
-  assert.equal(ui.get('scenario-objective-rules').children.length,4);
+  assert.match(ui.get('scenario-objective').textContent,/three distinct instructions/);
   ui.run('state.current=3; drawLab()');
-  assert.equal(ui.get('scenario-workflow').children.length,7);
+  assert.match(ui.get('scenario-objective').textContent,/incorrect inspection interval/);
   ui.run('state.current=4; drawLab()');
   assert.equal(ui.get('scenario-workflow'),null);
-  assert.equal(ui.get('scenario-objective-rules').children.length,3);
+  assert.equal(ui.get('scenario-objective-rules'),null);
   assert.equal(ui.get('hints').children.length,1);
   const other = await studentUI();
   assert.equal(other.get('hints').children.length,0);

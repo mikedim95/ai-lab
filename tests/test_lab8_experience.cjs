@@ -6,8 +6,8 @@ const {test} = require('node:test');
 const read = name => fs.readFileSync(path.join(__dirname, '../static', name), 'utf8');
 const app = read('app.js').replace(/\nstart\(\);\s*$/, '');
 const hints = [
-  'Investigate which maintenance documents you can edit or add to the knowledge base.',
-  "Saving a document does not automatically update Plant AI's retrieval snapshot.",
+  'Open View bulletin to inspect the previous maintenance posts and add your own document.',
+  'Save your new document before asking Plant AI about it. Save also makes it available for retrieval.',
   'Ask a question related to your modified document and examine which sources were retrieved.',
   'Consider the difference between Plant AI summarizing a retrieved document and treating instructions within it as authoritative.',
 ];
@@ -59,14 +59,10 @@ async function studentUI(extra = {}) {
   return {context,get,run,result,respond,click:id=>get(id).listeners.click()};
 }
 
-test('Lab 8 scenario explains the knowledge base and five separate workflow stages',async()=>{
-  const ui=await studentUI();
-  assert.match(ui.get('scenario-summary').textContent,/knowledge base to answer maintenance questions/);
-  assert.match(ui.get('scenario-objective').textContent,/combining student-controlled knowledge with conversational instructions/);
-  assert.equal(ui.get('scenario-workflow').children.length,5);
-  assert.deepEqual(ui.get('scenario-workflow').children.map(child=>child.textContent.split(':')[0]),
-    ['Edit','Save','Synchronize','Retrieve','Review the response']);
-  assert.match(ui.get('scenario-objective-rules').textContent,/alone does not verify exploitation/);
+test('Lab 8 retains its objective without scenario, rules or workflow prose', async () => {
+  const ui = await studentUI();
+  assert.match(ui.get('scenario-objective').textContent, /combining student-controlled knowledge with conversational instructions/);
+  for (const id of ['scenario-summary','scenario-surfaces','scenario-objective-rules','scenario-workflow']) assert.equal(ui.get(id), null);
 });
 
 test('four exact hints reveal sequentially, hide, and remain independent between students',async()=>{
@@ -80,18 +76,14 @@ test('four exact hints reveal sequentially, hide, and remain independent between
   ui.click('hint-button');assert.equal(ui.get('hints').children.length,0);
 });
 
-test('knowledge disabled, saved awaiting sync, and active snapshot are separate states',async()=>{
+test('the shared bulletin card hides technical retrieval controls in every snapshot state',async()=>{
   const ui=await studentUI();
-  ui.run('drawKnowledge();drawWorkspace()');
-  assert.equal(ui.get('kb-status').textContent,'Knowledge base disabled');
-  ui.run("state.labs['8'].kb_revision=2;state.labs['8'].synced_revision=1;drawKnowledge();drawWorkspace()");
-  assert.match(ui.get('kb-notice').textContent,/Knowledge base disabled/);
-  assert.match(ui.get('kb-notice').textContent,/Saved document awaiting synchronization/);
-  ui.run("state.labs['8'].use_kb=true;drawKnowledge();drawWorkspace()");
-  assert.match(ui.get('kb-notice').textContent,/Current synchronized snapshot active/);
-  assert.match(ui.get('kb-notice').textContent,/saved edits are excluded until you sync/);
-  ui.run("state.labs['8'].synced_revision=2;drawKnowledge()");
-  assert.equal(ui.get('kb-status').textContent,'Current synchronized snapshot active');
+  for (const [enabled,saved,synced] of [[false,0,0],[false,2,1],[true,2,1],[true,2,2]]) {
+    ui.context.snapshot={enabled,saved,synced};
+    ui.run("Object.assign(state.labs['8'], {use_kb:snapshot.enabled,kb_revision:snapshot.saved,synced_revision:snapshot.synced}); drawKnowledge();drawWorkspace()");
+    assert.match(ui.get('workspace-content').textContent,/View bulletin/);
+    for(const id of ['knowledge-button','use-kb','sync-kb','kb-status','kb-notice']) assert.equal(ui.get(id),null);
+  }
 });
 
 test('unsaved editor changes update their status without saving or syncing',async()=>{
@@ -99,7 +91,8 @@ test('unsaved editor changes update their status without saving or syncing',asyn
   ui.click('new-document');
   ui.get('document-content').value='Fictional inspection note.';
   ui.get('document-content').listeners.input();
-  assert.equal(ui.get('kb-status').textContent,'Editing · Unsaved changes');
+  assert.equal(ui.run("state.editors.get(8).content"),'Fictional inspection note.');
+  assert.equal(ui.get('document-editor').hidden,false);
   assert.equal(ui.run("state.labs['8'].documents.length"),0);
   assert.equal(ui.run("state.labs['8'].kb_revision"),0);
 });
@@ -146,7 +139,7 @@ test('source feedback remains about the last reply after save, sync, or retrieva
   const ui=await studentUI();
   ui.result({sources:[{id:'source-id',title:'Earlier note',injected:true}]});
   ui.run("state.labs['8'].use_kb=false;state.labs['8'].kb_revision=3;state.labs['8'].synced_revision=2;drawKnowledge();drawWorkspace();drawConversation()");
-  assert.match(ui.get('kb-notice').textContent,/Knowledge base disabled/);
+  assert.equal(ui.get('kb-notice'),null);
   assert.match(ui.get('attempt-result').textContent,/Sources describe the last reply/);
   assert.match(ui.get('attempt-result').textContent,/does not rerun retrieval/);
   assert.match(ui.get('attempt-result').textContent,/Earlier note · source-id/);
