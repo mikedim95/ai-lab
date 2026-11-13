@@ -54,14 +54,17 @@ async function main() {
       page.on('dialog',dialog=>dialog.accept());
       await page.goto(ready.url+'/lab/8');
       await page.waitForFunction(()=>state.current===8 && state.catalog.length===9);
-      const inlineKnowledge=async()=>{
+      const documentInbox=async()=>{
         assert.equal(await page.locator('#knowledge-panel').count(),1);
-        assert.equal(await page.locator('#knowledge-panel').evaluate(el=>el.parentElement.id),'lab8-knowledge-workspace');
-        assert.equal(await page.locator('#knowledge-dialog').evaluate(el=>el.open),false);
+        assert.equal(await page.locator('#knowledge-panel').evaluate(el=>Boolean(el.closest('#knowledge-dialog'))),true);
+        assert.equal(await page.locator('#workspace-content > .scenario-body > h3').innerText(),'Maintenance Document Inbox');
+        assert.equal(await page.locator('#workspace-content form, #workspace-content details, #lab8-kb-feedback, #lab8-reply-feedback').count(),0);
       };
+      const closeKnowledge=async()=>{if(await page.locator('#knowledge-dialog').evaluate(el=>el.open))await page.locator('[data-close="knowledge-dialog"]').click();};
       const openKnowledge=async()=>{
-        await page.locator('#knowledge-button').click();await inlineKnowledge();
-        assert.equal(await page.evaluate(()=>document.activeElement===document.querySelector('#knowledge-panel>summary')),true);
+        if(!await page.locator('#knowledge-dialog').evaluate(el=>el.open))await page.locator('#knowledge-button').click();
+        await documentInbox();
+        assert.equal(await page.locator('#knowledge-dialog').evaluate(el=>el.open),true);
       };
       const post=async(action,click)=>{
         const pending=page.waitForResponse(r=>r.url().endsWith('/api/labs/8/'+action));
@@ -73,6 +76,7 @@ async function main() {
         return result;
       };
       const ask=async(message=ready.question)=>{
+        await closeKnowledge();
         await page.locator('#prompt').fill(message);
         const result=await post('chat',()=>page.locator('#prompt').press('Enter'));
         assert.equal(result.lab.last_result.request_id,result.request_id);
@@ -80,6 +84,7 @@ async function main() {
       };
       const sync=async()=>post('kb',()=>page.locator('#sync-kb').click());
       const difficulty=async level=>{
+        await closeKnowledge();
         const result=await post('defense',()=>page.locator('#defense-select').selectOption(String(level)));
         assert.equal(result.lab.defense_level,level);
       };
@@ -96,12 +101,14 @@ async function main() {
         }
         await page.locator('#hint-button').click();
         assert.equal(await page.locator('#hints li').count(),0);
-        assert.match(await page.locator('#lab8-kb-feedback').innerText(),/Knowledge base disabled/);
+        await documentInbox();
       });
       await check(name+': readable scenario and workspace layout',async()=>{
-        await inlineKnowledge();
-        assert.equal(await page.locator('#knowledge-panel').isVisible(),true);
-        assert.equal(await page.locator('#new-document').isVisible(),true);
+        await documentInbox();
+        assert.equal(await page.locator('#workspace-content article.document-row').count(),2);
+        assert.equal(await page.locator('#workspace-content article.document-row > .lab3-document-heading').count(),2);
+        assert.equal(await page.locator('#workspace-content article.document-row > button.secondary-button').count(),2);
+        assert.equal(await page.locator('#knowledge-dialog').evaluate(el=>el.open),false);
         await page.locator('.scenario-body').first().evaluate(element=>{element.scrollTop=0;});
         const geometry=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,
           boxes:['.scenario-column','.chat-card','.lab-tools','#prompt'].map(selector=>{
@@ -111,27 +118,29 @@ async function main() {
         for(const box of geometry.boxes)assert(box.width>0&&box.left>=0&&box.right<=geometry.width+1,JSON.stringify(box));
         await page.screenshot({path:path.join(artifacts,name+'-scenario.png'),fullPage:true});
       });
-      await check(name+': unsaved inline draft survives Lab 7 and Lab 3 navigation',async()=>{
-        await page.locator('#new-document').click();
+      await check(name+': Review uses the shared editor and preserves separate drafts across Labs 3, 7 and 8',async()=>{
+        const review=async()=>page.locator('#workspace-content article.document-row button').first().click();
+        await review();
+        assert.equal(await page.locator('#document-title').inputValue(),'B-01 / G-01 Maintenance Handover');
         await page.locator('#document-title').fill('Lab 8 workspace draft');
         await page.locator('#document-content').fill('A public maintenance note for isolated workspace QA.');
-        const navigate=async id=>{await page.locator('#lab-select').selectOption(String(id));await page.waitForFunction(id=>state.current===id,id);};
-        await navigate(7);
-        assert.equal(await page.locator('#knowledge-panel').evaluate(el=>el.parentElement.id),'lab7-knowledge-workspace');
-        await page.locator('#new-document').click();
+        const navigate=async id=>{await closeKnowledge();await page.locator('#lab-select').selectOption(String(id));await page.waitForFunction(id=>state.current===id,id);};
+        await navigate(7);await documentInbox();await review();
+        assert.equal(await page.locator('#document-title').inputValue(),'B-01 Operations Policy');
         await page.locator('#document-title').fill('Independent Lab 7 draft');
-        await navigate(8);await inlineKnowledge();
+        await navigate(8);await documentInbox();await review();
         assert.equal(await page.locator('#document-title').inputValue(),'Lab 8 workspace draft');
         assert.equal(await page.locator('#document-content').inputValue(),'A public maintenance note for isolated workspace QA.');
         await navigate(3);await page.locator('#review-bulletin').click();
         assert.equal(await page.locator('#knowledge-dialog').evaluate(el=>el.open),true);
         await page.locator('[data-close="knowledge-dialog"]').click();
-        await navigate(7);assert.equal(await page.locator('#document-title').inputValue(),'Independent Lab 7 draft');
+        await navigate(7);await review();assert.equal(await page.locator('#document-title').inputValue(),'Independent Lab 7 draft');
         await page.locator('#cancel-document').click();
-        await navigate(8);await openKnowledge();
+        await navigate(8);await review();
         assert.equal(await page.locator('#document-title').inputValue(),'Lab 8 workspace draft');
         assert.equal(await page.evaluate(()=>state.labs['8'].documents.length),2);
         await page.locator('#cancel-document').click();
+        await closeKnowledge();
       });
       let noteId;
       await check(name+': editing and saving do not synchronize',async()=>{
@@ -147,8 +156,8 @@ async function main() {
         assert.equal(result.lab.use_kb,false);
         assert.match(await page.locator('#kb-status').innerText(),/awaiting synchronization/);
         assert.match(await page.locator('#kb-notice').innerText(),/Knowledge base disabled/);
-        await inlineKnowledge();
-        const geometry=await page.locator('#knowledge-panel').evaluate(element=>({width:element.clientWidth,scroll:element.scrollWidth}));
+        await documentInbox();
+        const geometry=await page.locator('#knowledge-dialog').evaluate(element=>({width:element.clientWidth,scroll:element.scrollWidth}));
         assert(geometry.width>0&&geometry.scroll<=geometry.width+1,JSON.stringify(geometry));
         await page.screenshot({path:path.join(artifacts,name+'-saved.png'),fullPage:true});
       });
@@ -231,6 +240,7 @@ async function main() {
         const result=await post('kb',()=>page.locator('#use-kb').uncheck());
         assert.equal(result.lab.use_kb,false);
         assert.match(await page.locator('#kb-notice').innerText(),/Knowledge base disabled/);
+        await closeKnowledge();
         const fresh=await browser.newContext({viewport});const student=await fresh.newPage();
         await student.goto(ready.url+'/lab/8');
         await student.waitForFunction(()=>state.current===8&&state.catalog.length===9);

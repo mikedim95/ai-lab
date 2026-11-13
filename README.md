@@ -242,8 +242,9 @@ Solution rendering, ordered document/prompt sections and clipboard behavior
 (including plain HTTP) run with `node scripts/check_solutions_browser.cjs`.
 The check reuses the disposable HTTP fixture and never executes solution prompts.
 
-Labs 7 and 8 show their knowledge-base controls in the right-side Lab Workspace.
-The chat shortcut focuses the inline editor; Lab 3 keeps its document dialog.
+Labs 3, 7 and 8 share the Maintenance Document Inbox in the right-side Lab
+Workspace. Compact document cards open the existing editor with a Review button;
+editing, Save and Sync stay in the knowledge-base dialog.
 `node scripts/check_lab7_workspace_browser.cjs` and
 `node scripts/check_lab8_browser.cjs` use isolated students to verify editing,
 save/sync separation, navigation, refresh and Lab 8's mocked response verification.

@@ -740,15 +740,8 @@ function drawKnowledge() {
 }
 
 function openKnowledge() {
-  const panel = $('knowledge-panel');
-  panel.open = true;
-  if (state.current === 7 || state.current === 8) {
-    const summary = panel.querySelector('summary');
-    summary?.scrollIntoView({block:'nearest',inline:'nearest'});
-    summary?.focus({preventScroll:true});
-  } else {
-    $('knowledge-dialog').showModal();
-  }
+  $('knowledge-panel').open = true;
+  $('knowledge-dialog').showModal();
 }
 
 function updateControls() {
@@ -855,14 +848,20 @@ function drawLab9Progress() {
     'Only verified events in the current attempt count. Starting a new chat resets progress.'));
 }
 
+function documentInboxCard(title, badge, fields, review) {
+  const card = node('article', 'document-row');
+  const heading = node('div', 'lab3-document-heading');
+  heading.append(node('h3', '', title), badge);
+  const details = node('div', 'scenario-summary');
+  for (const [label, value] of fields) {
+    details.append(node('div', '', `${label}: ${value}`));
+  }
+  card.append(heading, details, review);
+  return card;
+}
+
 function drawWorkspace() {
   const target = $('workspace-content');
-  const knowledge = $('knowledge-panel');
-  if (['lab7-knowledge-workspace', 'lab8-knowledge-workspace'].includes(knowledge?.parentElement?.id)
-      && knowledge.parentElement.id !== `lab${state.current}-knowledge-workspace`) {
-    $('knowledge-dialog').append(knowledge);
-    knowledge.open = true;
-  }
   $('workspace-label').textContent = `Lab ${String(state.current).padStart(2, '0')}`;
   if (state.current === 1) {
     if (!boilerPanel) {
@@ -884,16 +883,8 @@ function drawWorkspace() {
     const panel = node('section', 'scenario-body');
     panel.append(node('h3', '', 'Maintenance Document Inbox'));
     const inbox = node('div', 'document-list');
-    const card = node('article', 'document-row');
-    const heading = node('div');
     const bulletin = currentLab().documents.find(doc => doc.id === 'sb-b01-047') || currentLab().documents.find(doc =>
       /\bSB-B01-047\b/i.test(doc.title) || /^Document reference:\s*SB-B01-047\s*$/im.test(doc.content));
-    heading.className = 'lab3-document-heading';
-    heading.append(node('h3', '', 'Contractor Service Bulletin'), lab3StatusBadge(bulletin?.id || 'sb-b01-047'));
-    const details = node('div', 'scenario-summary');
-    for (const [label, value] of [['Reference', 'SB-B01-047'], ['Equipment', 'Boiler B-01'], ['Sensor', 'PT-B01'], ['Source', 'External service contractor']]) {
-      details.append(node('div', '', `${label}: ${value}`));
-    }
     const review = node('button', 'secondary-button', 'Review bulletin');
     review.id = 'review-bulletin'; review.type = 'button';
     review.addEventListener('click', () => {
@@ -917,8 +908,9 @@ Status: Unverified contractor maintenance report.`
       $('knowledge-dialog').showModal();
       $('document-content').focus();
     });
-    card.append(heading, details, review);
-    inbox.append(card); panel.append(inbox);
+    inbox.append(documentInboxCard('Contractor Service Bulletin', lab3StatusBadge(bulletin?.id || 'sb-b01-047'),
+      [['Reference', 'SB-B01-047'], ['Equipment', 'Boiler B-01'], ['Sensor', 'PT-B01'], ['Source', 'External service contractor']], review));
+    panel.append(inbox);
     target.replaceChildren(panel);
   } else if (state.current === 4) {
     const snapshot = currentLab().trusted_snapshot;
@@ -1016,45 +1008,28 @@ Status: Unverified contractor maintenance report.`
     panel.append(heading, details,
       node('p', 'scenario-summary', 'This lab tests identity claims. Even verified identity adoption grants no actual equipment permissions.'));
     target.replaceChildren(panel);
-  } else if (state.current === 7) {
-    let panel = target.querySelector('#lab7-knowledge-workspace');
-    if (!panel) {
-      panel = node('section', 'scenario-body workspace-knowledge');
-      panel.id = 'lab7-knowledge-workspace';
-      panel.append(node('h3', '', 'Knowledge base'),
-        node('p', 'scenario-summary', 'Edit or add a document, save it, then sync and enable it for retrieval.'));
-      target.replaceChildren(panel);
+  } else if (state.current === 7 || state.current === 8) {
+    const panel = node('section', 'scenario-body');
+    panel.append(node('h3', '', 'Maintenance Document Inbox'));
+    const inbox = node('div', 'document-list');
+    for (const doc of currentLab().documents) {
+      const review = node('button', 'secondary-button', 'Review document');
+      review.type = 'button';
+      review.setAttribute('aria-label', `Review ${doc.title}`);
+      review.addEventListener('click', () => {
+        if (state.editors.get(state.current)?.id !== doc.id) {
+          state.editors.set(state.current, { id: doc.id, title: doc.title, content: doc.content });
+        }
+        drawKnowledge(); updateControls(); openKnowledge();
+        $('document-content').focus();
+      });
+      inbox.append(documentInboxCard(doc.title,
+        node('span', 'document-tag', doc.is_user_injected ? 'Your document' : 'Original'),
+        [['Equipment', state.current === 7 ? 'Boiler B-01' : 'Boiler B-01 / Generator G-01']], review));
     }
-    if (knowledge.parentElement !== panel) {
-      knowledge.open = true;
-      panel.append(knowledge);
-    }
-  } else if (state.current === 8) {
-    let panel = $('lab8-knowledge-workspace');
-    if (!panel || panel.parentElement !== target) {
-      panel = node('section', 'scenario-body workspace-knowledge lab8-workspace');
-      panel.id = 'lab8-knowledge-workspace';
-      const status = node('div', 'lab8-kb-feedback');
-      status.id = 'lab8-kb-feedback';
-      status.setAttribute('role', 'status');
-      const reply = node('div', 'lab8-reply-feedback');
-      reply.id = 'lab8-reply-feedback';
-      reply.setAttribute('role', 'status');
-      knowledge.open = true;
-      panel.append(node('h3', '', 'Knowledge and conversation'), status, knowledge, reply,
-        node('p', 'lab8-source-note',
-          'Source retrieval and model behavior are separate steps. Only backend verification unlocks a flag; submit it to earn 400 points.'));
-      target.replaceChildren(panel);
-    }
-    $('lab8-kb-feedback').replaceChildren(...lab8KnowledgeFeedback().map(text => node('p', '', text)));
-    const reply = $('lab8-reply-feedback');
-    reply.replaceChildren();
-    if (state.pending.has(8)) {
-      reply.append(node('p', '', 'Awaiting the current model response.'));
-    } else {
-      reply.append(node('p', '', lab8ReplyFeedback(currentLab().last_result)));
-      if (currentLab().last_result) reply.append(node('p', '', lab8RetrievalFeedback(currentLab().last_result)));
-    }
+    if (!currentLab().documents.length) inbox.append(node('p', 'scenario-summary', 'No documents saved. Open the knowledge base to add one.'));
+    panel.append(inbox);
+    target.replaceChildren(panel);
   } else if (!target.querySelector('.workspace-empty')) {
     const placeholder = node('div', 'workspace-empty');
     const icon = node('span', 'workspace-empty-icon', '◇');
@@ -1142,7 +1117,6 @@ async function sendMessage(event) {
   $('prompt').value = '';
   $('error').hidden = true;
   drawConversation();
-  if (id === 8) drawWorkspace();
   if (id === 2) drawLab2Progress();
   updateControls();
   let trace = null;

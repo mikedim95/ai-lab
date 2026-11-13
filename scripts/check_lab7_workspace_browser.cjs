@@ -1,4 +1,4 @@
-/* Lab 7's existing KB form in the side workspace, using a disposable backend.
+/* Lab 7's Lab 3-style document inbox, using a disposable backend.
  * Only isolated KB save/sync operations are performed; no model requests. */
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
@@ -30,36 +30,39 @@ async function main(){
    await page.goto(ready.url+'/lab/7');await page.waitForFunction(()=>state.catalog.length===9&&state.current===7);
    const initial=(await(await context.request.get(ready.url+'/api/state')).json()).labs;
    const initialCount=initial['7'].documents.length;
-   const navigate=async lab=>{await page.locator('#lab-select').selectOption(String(lab));await page.waitForFunction(id=>state.current===id,lab);};
+   const closeKnowledge=async()=>{if(await page.locator('#knowledge-dialog').evaluate(e=>e.open))await page.locator('[data-close="knowledge-dialog"]').click();};
+   const navigate=async lab=>{await closeKnowledge();await page.locator('#lab-select').selectOption(String(lab));await page.waitForFunction(id=>state.current===id,lab);};
+   const review=async()=>page.locator('#workspace-content article.document-row button').first().click();
    const post=async action=>{
     const pending=page.waitForResponse(r=>r.url().endsWith('/api/labs/7/kb'));
     await action();const response=await pending;assert.equal(response.status(),200);const body=await response.json();
     await page.waitForFunction(()=>!state.kbBusy.has(7));return body;
    };
-   const inline=async()=>{
+   const inbox=async()=>{
     assert.equal(await page.locator('#knowledge-panel').count(),1);
-    assert.equal(await page.locator('#knowledge-panel').evaluate(e=>Boolean(e.closest('#workspace-content'))),true);
-    assert.equal(await page.locator('#knowledge-dialog').evaluate(e=>e.open),false);
+    assert.equal(await page.locator('#knowledge-panel').evaluate(e=>Boolean(e.closest('#knowledge-dialog'))),true);
+    assert.equal(await page.locator('#workspace-content > .scenario-body > h3').innerText(),'Maintenance Document Inbox');
+    assert.equal(await page.locator('#workspace-content form, #workspace-content details, #lab8-kb-feedback, #lab8-reply-feedback').count(),0);
    };
-   await check(device+': Lab 7 shows its existing KB controls in the side workspace',async()=>{
-    await inline();assert.equal(await page.locator('#knowledge-panel').isVisible(),true);
-    assert.equal(await page.locator('#document-list .document-row').count(),initialCount);
-    assert.equal(await page.locator('#new-document').isVisible(),true);
-    assert.equal(await page.locator('#sync-kb').isVisible(),true);
+   await check(device+': Lab 7 matches the compact Lab 3 document inbox',async()=>{
+    await inbox();assert.equal(await page.locator('#knowledge-dialog').evaluate(e=>e.open),false);
+    assert.equal(await page.locator('#workspace-content article.document-row').count(),initialCount);
+    assert.equal(await page.locator('#workspace-content article.document-row > .lab3-document-heading').count(),initialCount);
+    assert.equal(await page.locator('#workspace-content article.document-row > button.secondary-button').count(),initialCount);
     assert.equal(posts.length,0);
    });
-   await check(device+': inline edits remain unsaved and survive navigation through Labs 3 and 8',async()=>{
-    await page.locator('#document-list .document-actions button').first().click();
+   await check(device+': Review opens the correct editor and drafts survive Labs 3 and 8',async()=>{
+    await review();assert.equal(await page.locator('#knowledge-dialog').evaluate(e=>e.open),true);
+    assert.equal(await page.locator('#document-title').inputValue(),initial['7'].documents[0].title);
     await page.locator('#document-title').fill('Lab 7 workspace draft');
     await page.locator('#document-content').fill('Public maintenance note for isolated workspace QA.');
     assert.equal(posts.length,0);
     await navigate(3);assert.equal(await page.locator('#knowledge-panel').evaluate(e=>Boolean(e.closest('#knowledge-dialog'))),true);
     await page.locator('#review-bulletin').click();assert.equal(await page.locator('#knowledge-dialog').evaluate(e=>e.open),true);
     await page.locator('[data-close="knowledge-dialog"]').click();
-    await navigate(8);await page.locator('#knowledge-button').click();
-    await inline();
-    assert.equal(await page.locator('#knowledge-panel').evaluate(e=>e.parentElement.id),'lab8-knowledge-workspace');
-    await navigate(7);await inline();
+    await navigate(8);await inbox();await review();
+    assert.equal(await page.locator('#document-title').inputValue(),initial['8'].documents[0].title);
+    await navigate(7);await inbox();await review();
     assert.equal(await page.locator('#document-title').inputValue(),'Lab 7 workspace draft');
     assert.equal(await page.locator('#document-content').inputValue(),'Public maintenance note for isolated workspace QA.');
     const saved=(await(await context.request.get(ready.url+'/api/state')).json()).labs['7'];
@@ -71,15 +74,15 @@ async function main(){
     assert.equal(result.lab.documents[0].content,'Public maintenance note for isolated workspace QA.');
     assert(result.lab.kb_revision>result.lab.synced_revision);assert.equal(result.lab.use_kb,false);
     assert.equal(posts.at(-1).body.sync,false);assert.equal(posts.at(-1).body.use_kb,false);
-    await inline();assert.equal(await page.locator('#document-editor').isVisible(),false);
+    await inbox();assert.equal(await page.locator('#document-editor').isVisible(),false);
     assert.match(await page.locator('#kb-notice').innerText(),/Document saved/);
    });
    let synced;
-   await check(device+': Sync and enable activates the saved snapshot in place',async()=>{
+   await check(device+': Sync and enable activates the saved snapshot through the shared dialog',async()=>{
     const result=await post(()=>page.locator('#sync-kb').click());synced=result.lab.synced_revision;
     assert.equal(result.lab.kb_revision,synced);assert.equal(result.lab.use_kb,true);
     assert.equal(posts.at(-1).body.sync,true);assert.equal(posts.at(-1).body.use_kb,true);
-    assert.equal(await page.locator('#use-kb').isChecked(),true);await inline();
+    assert.equal(await page.locator('#use-kb').isChecked(),true);await inbox();
    });
    await check(device+': adding a document and refreshing preserves the saved and synced versions separately',async()=>{
     await page.locator('#new-document').click();
@@ -88,14 +91,16 @@ async function main(){
     const result=await post(()=>page.locator('#save-document').click());
     assert.equal(result.lab.documents.length,initialCount+1);assert.equal(result.lab.synced_revision,synced);
     assert(result.lab.kb_revision>synced);assert.equal(result.lab.use_kb,true);
-    await page.reload();await page.waitForFunction(()=>state.current===7&&state.catalog.length===9);await inline();
-    assert.equal(await page.locator('#document-list .document-row').count(),initialCount+1);
+    await page.reload();await page.waitForFunction(()=>state.current===7&&state.catalog.length===9);await inbox();
+    assert.equal(await page.locator('#workspace-content article.document-row').count(),initialCount+1);
+    await page.locator('#knowledge-button').click();
     assert.equal(await page.locator('#use-kb').isChecked(),true);
     assert.match(await page.locator('#kb-status').innerText(),/waiting to sync/i);
    });
-   await check(device+': the chat shortcut focuses the side panel without page overflow',async()=>{
-    await page.locator('#knowledge-button').click();await inline();
-    assert.equal(await page.evaluate(()=>document.activeElement===document.querySelector('#knowledge-panel>summary')),true);
+   await check(device+': the chat shortcut uses the same editor without workspace clutter or page overflow',async()=>{
+    await closeKnowledge();await page.locator('#knowledge-button').click();await inbox();
+    assert.equal(await page.locator('#knowledge-dialog').evaluate(e=>e.open),true);
+    await closeKnowledge();
     const geometry=await page.evaluate(()=>({width:innerWidth,height:innerHeight,scrollWidth:document.scrollingElement.scrollWidth,
      scrollHeight:document.scrollingElement.scrollHeight,x:scrollX,y:scrollY}));
     assert(geometry.scrollWidth<=geometry.width+2&&geometry.scrollHeight<=geometry.height+2&&Math.abs(geometry.x)<1&&Math.abs(geometry.y)<1,JSON.stringify(geometry));
@@ -104,9 +109,9 @@ async function main(){
    await check(device+': another student starts with independent Lab 7 documents',async()=>{
     const other=await browser.newContext({viewport});const fresh=await other.newPage();await fresh.goto(ready.url+'/lab/7');
     await fresh.waitForFunction(()=>state.current===7&&state.catalog.length===9);
-    assert.equal(await fresh.locator('#document-list .document-row').count(),initialCount);
+    assert.equal(await fresh.locator('#workspace-content article.document-row').count(),initialCount);
     assert.equal(await fresh.locator('#use-kb').isChecked(),false);
-    assert(!(await fresh.locator('#document-list').innerText()).includes('Lab 7 workspace draft'));
+    assert(!(await fresh.locator('#workspace-content').innerText()).includes('Lab 7 workspace draft'));
     await other.close();
    });
    await check(device+': other labs and scoring remain unchanged with no chat or flag requests',async()=>{

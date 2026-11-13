@@ -86,10 +86,10 @@ test('knowledge disabled, saved awaiting sync, and active snapshot are separate 
   assert.equal(ui.get('kb-status').textContent,'Knowledge base disabled');
   ui.run("state.labs['8'].kb_revision=2;state.labs['8'].synced_revision=1;drawKnowledge();drawWorkspace()");
   assert.match(ui.get('kb-notice').textContent,/Knowledge base disabled/);
-  assert.match(ui.get('lab8-kb-feedback').textContent,/Saved document awaiting synchronization/);
+  assert.match(ui.get('kb-notice').textContent,/Saved document awaiting synchronization/);
   ui.run("state.labs['8'].use_kb=true;drawKnowledge();drawWorkspace()");
-  assert.match(ui.get('lab8-kb-feedback').textContent,/Current synchronized snapshot active/);
-  assert.match(ui.get('lab8-kb-feedback').textContent,/saved edits are excluded until you sync/);
+  assert.match(ui.get('kb-notice').textContent,/Current synchronized snapshot active/);
+  assert.match(ui.get('kb-notice').textContent,/saved edits are excluded until you sync/);
   ui.run("state.labs['8'].synced_revision=2;drawKnowledge()");
   assert.equal(ui.get('kb-status').textContent,'Current synchronized snapshot active');
 });
@@ -116,7 +116,8 @@ test('student document retrieval alone never shows success or reveals the learni
 test('prior capture does not mark a later unverified reply successful',async()=>{
   const ui=await studentUI({exploited:true,flag:'fixture'});
   ui.result();
-  assert.equal(ui.get('lab8-reply-feedback').textContent,'No exploit verified.No documents retrieved for the last reply.');
+  assert.match(ui.get('attempt-result').textContent,/No exploit verified/);
+  assert.match(ui.get('attempt-result').textContent,/No documents retrieved for the last reply/);
   assert(!ui.get('attempt-result').className.includes('success'));
 });
 
@@ -127,7 +128,7 @@ test('only a boolean backend trigger displays verified feedback',async()=>{
   }
   ui.result({triggered:true});
   assert(ui.get('attempt-result').className.includes('success'));
-  assert.match(ui.get('lab8-reply-feedback').textContent,/Exploit verified/);
+  assert.match(ui.get('attempt-result').textContent,/Exploit verified/);
   assert.equal(ui.get('lab8-completion-explanation').hidden,true);
 });
 
@@ -144,8 +145,8 @@ test('request difficulty and excluded sources use backend metadata without inter
 test('source feedback remains about the last reply after save, sync, or retrieval disablement',async()=>{
   const ui=await studentUI();
   ui.result({sources:[{id:'source-id',title:'Earlier note',injected:true}]});
-  ui.run("state.labs['8'].use_kb=false;state.labs['8'].kb_revision=3;state.labs['8'].synced_revision=2;drawWorkspace();drawConversation()");
-  assert.match(ui.get('lab8-kb-feedback').textContent,/Knowledge base disabled/);
+  ui.run("state.labs['8'].use_kb=false;state.labs['8'].kb_revision=3;state.labs['8'].synced_revision=2;drawKnowledge();drawWorkspace();drawConversation()");
+  assert.match(ui.get('kb-notice').textContent,/Knowledge base disabled/);
   assert.match(ui.get('attempt-result').textContent,/Sources describe the last reply/);
   assert.match(ui.get('attempt-result').textContent,/does not rerun retrieval/);
   assert.match(ui.get('attempt-result').textContent,/Earlier note · source-id/);
@@ -155,7 +156,7 @@ test('a pending request hides earlier outcome feedback',async()=>{
   const ui=await studentUI();
   ui.result({triggered:true});
   ui.run("state.pending.set(8,{message:'Handover question',started:Date.now()});drawWorkspace();drawConversation()");
-  assert.equal(ui.get('lab8-reply-feedback').textContent,'Awaiting the current model response.');
+  assert.match(ui.get('messages').textContent,/Thinking/);
   assert.equal(ui.get('attempt-result').hidden,true);
 });
 
