@@ -242,9 +242,11 @@ Solution rendering, ordered document/prompt sections and clipboard behavior
 (including plain HTTP) run with `node scripts/check_solutions_browser.cjs`.
 The check reuses the disposable HTTP fixture and never executes solution prompts.
 
-Lab 7's side knowledge-base editor is checked with
-`node scripts/check_lab7_workspace_browser.cjs`, using isolated students to verify
-editing, save/sync separation, navigation and refresh without model requests.
+Labs 7 and 8 show their knowledge-base controls in the right-side Lab Workspace.
+The chat shortcut focuses the inline editor; Lab 3 keeps its document dialog.
+`node scripts/check_lab7_workspace_browser.cjs` and
+`node scripts/check_lab8_browser.cjs` use isolated students to verify editing,
+save/sync separation, navigation, refresh and Lab 8's mocked response verification.
 
 Run the complete JavaScript suite with `node --test tests/*.cjs`. If a host's
 installed `capstone` Python package shadows this repository's `capstone/`

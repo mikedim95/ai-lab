@@ -742,7 +742,7 @@ function drawKnowledge() {
 function openKnowledge() {
   const panel = $('knowledge-panel');
   panel.open = true;
-  if (state.current === 7) {
+  if (state.current === 7 || state.current === 8) {
     const summary = panel.querySelector('summary');
     summary?.scrollIntoView({block:'nearest',inline:'nearest'});
     summary?.focus({preventScroll:true});
@@ -858,7 +858,8 @@ function drawLab9Progress() {
 function drawWorkspace() {
   const target = $('workspace-content');
   const knowledge = $('knowledge-panel');
-  if (state.current !== 7 && knowledge?.parentElement?.id === 'lab7-knowledge-workspace') {
+  if (['lab7-knowledge-workspace', 'lab8-knowledge-workspace'].includes(knowledge?.parentElement?.id)
+      && knowledge.parentElement.id !== `lab${state.current}-knowledge-workspace`) {
     $('knowledge-dialog').append(knowledge);
     knowledge.open = true;
   }
@@ -1029,24 +1030,31 @@ Status: Unverified contractor maintenance report.`
       panel.append(knowledge);
     }
   } else if (state.current === 8) {
-    const panel = node('section', 'scenario-body lab8-workspace');
-    panel.append(node('h3', '', 'Knowledge and conversation'));
-    const status = node('div', 'lab8-kb-feedback');
-    status.id = 'lab8-kb-feedback';
-    status.setAttribute('role', 'status');
-    for (const text of lab8KnowledgeFeedback()) status.append(node('p', '', text));
-    const reply = node('div', 'lab8-reply-feedback');
-    reply.id = 'lab8-reply-feedback';
-    reply.setAttribute('role', 'status');
+    let panel = $('lab8-knowledge-workspace');
+    if (!panel || panel.parentElement !== target) {
+      panel = node('section', 'scenario-body workspace-knowledge lab8-workspace');
+      panel.id = 'lab8-knowledge-workspace';
+      const status = node('div', 'lab8-kb-feedback');
+      status.id = 'lab8-kb-feedback';
+      status.setAttribute('role', 'status');
+      const reply = node('div', 'lab8-reply-feedback');
+      reply.id = 'lab8-reply-feedback';
+      reply.setAttribute('role', 'status');
+      knowledge.open = true;
+      panel.append(node('h3', '', 'Knowledge and conversation'), status, knowledge, reply,
+        node('p', 'lab8-source-note',
+          'Source retrieval and model behavior are separate steps. Only backend verification unlocks a flag; submit it to earn 400 points.'));
+      target.replaceChildren(panel);
+    }
+    $('lab8-kb-feedback').replaceChildren(...lab8KnowledgeFeedback().map(text => node('p', '', text)));
+    const reply = $('lab8-reply-feedback');
+    reply.replaceChildren();
     if (state.pending.has(8)) {
       reply.append(node('p', '', 'Awaiting the current model response.'));
     } else {
       reply.append(node('p', '', lab8ReplyFeedback(currentLab().last_result)));
       if (currentLab().last_result) reply.append(node('p', '', lab8RetrievalFeedback(currentLab().last_result)));
     }
-    panel.append(status, reply, node('p', 'lab8-source-note',
-      'Source retrieval and model behavior are separate steps. Only backend verification unlocks a flag; submit it to earn 400 points.'));
-    target.replaceChildren(panel);
   } else if (!target.querySelector('.workspace-empty')) {
     const placeholder = node('div', 'workspace-empty');
     const icon = node('span', 'workspace-empty-icon', '◇');

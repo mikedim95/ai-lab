@@ -57,9 +57,9 @@ async function main(){
     await page.locator('#review-bulletin').click();assert.equal(await page.locator('#knowledge-dialog').evaluate(e=>e.open),true);
     await page.locator('[data-close="knowledge-dialog"]').click();
     await navigate(8);await page.locator('#knowledge-button').click();
-    assert.equal(await page.locator('#knowledge-dialog').evaluate(e=>e.open),true);
-    assert.equal(await page.locator('#knowledge-panel').count(),1);
-    await page.locator('[data-close="knowledge-dialog"]').click();await navigate(7);await inline();
+    await inline();
+    assert.equal(await page.locator('#knowledge-panel').evaluate(e=>e.parentElement.id),'lab8-knowledge-workspace');
+    await navigate(7);await inline();
     assert.equal(await page.locator('#document-title').inputValue(),'Lab 7 workspace draft');
     assert.equal(await page.locator('#document-content').inputValue(),'Public maintenance note for isolated workspace QA.');
     const saved=(await(await context.request.get(ready.url+'/api/state')).json()).labs['7'];
