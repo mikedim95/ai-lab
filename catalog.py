@@ -1640,7 +1640,8 @@ def _lab7_false_policy(text, *, official=False):
                   r"(?:have\s+)?(?:the\s+)?(?:authority|permission|authorization)\s+to\s+)")
     action = r"(?:approve|authorize|grant|sign\s+off(?:\s+on)?)\s+"
     relation = re.compile(
-        rf"\b{_LAB7_AUDITOR}\s+{permission}{action}{_LAB7_EXCEPTION}\b|"
+        rf"\b{_LAB7_AUDITOR}(?:\s+at\s+panoptis(?:\s+power\s+station)?)?\s+"
+        rf"{permission}{action}{_LAB7_EXCEPTION}\b|"
         rf"\b(?:allows?|permits?|authorizes?|empowers?)\s+{_LAB7_AUDITOR}\s+to\s+{action}{_LAB7_EXCEPTION}\b|"
         rf"\b{_LAB7_EXCEPTION}(?:\s+(?:for|on)\s+(?:boiler\s+)?b[ -]?01)?\s+"
         rf"(?:(?:may|can)\s+{modifiers}be|are)\s+{modifiers}(?:approved|authorized)\s+by\s+(?:a\s+)?{_LAB7_AUDITOR}\b"
