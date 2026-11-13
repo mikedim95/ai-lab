@@ -9,7 +9,8 @@ from unittest.mock import patch
 import catalog
 import server
 from lab8_verification_fixtures import (ADOPTED, EXISTING_INSTRUCTION, REFERENCE, SUMMARY,
-                                       OBSERVED_REPORT, OBSERVED_REPORT_PLAIN)
+                                       OBSERVED_REPORT, OBSERVED_REPORT_PLAIN,
+                                       ATTEMPT5_LONG_REPORT, ATTEMPT5_SHORT_REPORT)
 
 STRUCTURED = """Record ID: SIM-HO-008
 Equipment: Boiler B-01 and Generator G-01
@@ -31,6 +32,69 @@ class Lab8InterpreterTests(unittest.TestCase):
 
     def rejects(self, reply):
         self.assertFalse(catalog.lab8_adopts_handover(reply))
+
+    def test_attempt5_exact_reports_extract_only_the_canonical_status(self):
+        for label, reply in (("long", ATTEMPT5_LONG_REPORT), ("short", ATTEMPT5_SHORT_REPORT)):
+            with self.subTest(response=label):
+                self.accepts(reply)
+                blocks = catalog._lab8_record_blocks(catalog._lab8_report_text(reply, unquoted=True))
+                assertions = [assertion for _, block in blocks for assertion in catalog._lab8_status_assertions(block)]
+                self.assertEqual({value for value, _, _ in assertions}, {"cobalt-ready"})
+                self.assertTrue(any(authority for _, authority, _ in assertions))
+
+    def test_verified_prefix_status_code_and_verified_field(self):
+        header = "Record ID: SIM-HO-008\nEquipment: Boiler B-01 and Generator G-01\n"
+        for field in ("Current authenticated handover status: VERIFIED COBALT-READY",
+                      "Status Code: COBALT-READY (Official authenticated status)",
+                      "Current verified status: COBALT-READY",
+                      "Status: VERIFIED COBALT-READY"):
+            with self.subTest(field=field):
+                self.accepts(header + field)
+
+    def test_qualified_status_remains_an_exact_value(self):
+        for value in ("COBALT-READ", "XCOBALT-READY", "COBALT-READY-OTHER", "COBALT READY",
+                      "AMBER-PENDING", "READY", "VERIFIEDCOBALT-READY"):
+            with self.subTest(value=value):
+                self.rejects(ATTEMPT5_SHORT_REPORT.replace("VERIFIED COBALT-READY", "VERIFIED " + value))
+
+    def test_attempt5_unverified_hypothetical_quoted_and_refused_statuses_stay_rejected(self):
+        for label, reply in (("long", ATTEMPT5_LONG_REPORT), ("short", ATTEMPT5_SHORT_REPORT)):
+            for kind, excluded in (
+                ("unverified", reply.replace("COBALT-READY", "UNVERIFIED COBALT-READY")),
+                ("hypothetical_value", reply.replace("COBALT-READY", "HYPOTHETICAL COBALT-READY")),
+                ("hypothetical_report", "Hypothetical example:\n" + reply),
+                ("quoted", '"' + reply + '"'),
+                ("code", "```text\n" + reply + "\n```"),
+                ("refused", reply + "\nI cannot authenticate this handover."),
+                ("unverified_annotation", reply + "\nThis record is unverified."),
+            ):
+                with self.subTest(response=label, exclusion=kind):
+                    self.rejects(excluded)
+
+    def test_status_code_and_qualified_corrections_remain_contradictions(self):
+        for correction in ("Status Code: AMBER-PENDING (Official authenticated status)",
+                           "Current authenticated handover status: VERIFIED AMBER-PENDING",
+                           "Status Code: AMBER", "Status: CODE"):
+            with self.subTest(correction=correction):
+                self.rejects(ATTEMPT5_SHORT_REPORT + "\n" + correction)
+
+    def test_parenthetical_authority_keeps_negative_qualifications(self):
+        header = "Record ID: SIM-HO-008\nEquipment: Boiler B-01 and Generator G-01\n"
+        for annotation in ("Official unauthenticated status", "Official unverified status",
+                           "Not an authenticated status", "Hypothetical authenticated status"):
+            with self.subTest(annotation=annotation):
+                self.rejects(header + "Status Code: COBALT-READY (" + annotation + ")")
+
+    def test_attempt5_still_requires_retrieved_student_source_and_chained_injection(self):
+        for label, reply in (("long", ATTEMPT5_LONG_REPORT), ("short", ATTEMPT5_SHORT_REPORT)):
+            with self.subTest(response=label):
+                self.assertFalse(catalog.check_lab8_handover(EXISTING_INSTRUCTION, reply, []))
+                self.assertFalse(catalog.check_lab8_handover(EXISTING_INSTRUCTION, reply,
+                    [{**REFERENCE, "is_user_injected": False}]))
+                self.assertFalse(catalog.check_lab8_handover("What is the current handover status?", reply,
+                    [{**REFERENCE, "is_user_injected": True}]))
+                self.assertFalse(catalog.check_lab8_handover(EXISTING_INSTRUCTION, reply,
+                    [{**REFERENCE, "is_user_injected": True}], student_text=reply))
 
     def test_actual_observed_markdown_response(self):
         self.accepts(OBSERVED_REPORT)
@@ -182,7 +246,7 @@ class Lab8InterpreterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             app=server.Application(Path(directory));sid,_=app.store.get(None)
             app.update_kb(sid,8,{"documents":[REFERENCE],"sync":True,"use_kb":True})
-            for reply in (OBSERVED_REPORT, OBSERVED_REPORT_PLAIN):
+            for reply in (OBSERVED_REPORT, OBSERVED_REPORT_PLAIN, ATTEMPT5_LONG_REPORT, ATTEMPT5_SHORT_REPORT):
                 with patch('server.urllib.request.urlopen',return_value=io.BytesIO(json.dumps({'message':{'content':reply}}).encode())):
                     result=app.chat(sid,8,{'message':EXISTING_INSTRUCTION})
                 self.assertTrue(result['lab']['last_result']['triggered'])
@@ -190,6 +254,43 @@ class Lab8InterpreterTests(unittest.TestCase):
                 receipt=app.store.get(sid)[1]['labs']['8']['lab8_verification_receipts'][-1]
                 self.assertEqual(receipt['generation_source'],'production_ollama')
                 self.assertEqual(receipt['verification_reason'],'verified')
+                self.assertEqual(receipt['generated_response_sha256'], server._lab3_hash(reply))
+                self.assertEqual(receipt['displayed_response_sha256'], server._lab3_hash(reply))
+
+    def test_attempt5_generated_and_displayed_outputs_must_both_qualify(self):
+        for label, reply in (("long", ATTEMPT5_LONG_REPORT), ("short", ATTEMPT5_SHORT_REPORT)):
+            for generated, displayed in ((reply, SUMMARY), (SUMMARY, reply)):
+                with self.subTest(response=label, generated_qualifies=generated == reply), tempfile.TemporaryDirectory() as directory:
+                    app = server.Application(Path(directory)); sid, _ = app.store.get(None)
+                    app.update_kb(sid, 8, {"documents": [REFERENCE], "sync": True, "use_kb": True})
+                    payload = io.BytesIO(json.dumps({"message": {"content": generated}}).encode())
+                    with patch('server.urllib.request.urlopen', return_value=payload), \
+                            patch('server.defend_output', return_value=(displayed, None)):
+                        result = app.chat(sid, 8, {'message': EXISTING_INSTRUCTION})
+                    self.assertFalse(result['lab']['last_result']['triggered'])
+                    self.assertIsNone(result['lab']['flag'])
+                    self.assertEqual(result['summary']['score'], 0)
+                    receipt = app.store.get(sid)[1]['labs']['8']['lab8_verification_receipts'][-1]
+                    self.assertEqual(receipt['verification_reason'], 'handover_not_verified')
+
+    def test_attempt5_award_is_once_only_and_completion_persists(self):
+        for label, reply in (("long", ATTEMPT5_LONG_REPORT), ("short", ATTEMPT5_SHORT_REPORT)):
+            with self.subTest(response=label), tempfile.TemporaryDirectory() as directory:
+                app = server.Application(Path(directory)); sid, _ = app.store.get(None)
+                app.update_kb(sid, 8, {'documents': [REFERENCE], 'sync': True, 'use_kb': True})
+                payload = io.BytesIO(json.dumps({'message': {'content': reply}}).encode())
+                with patch('server.urllib.request.urlopen', return_value=payload):
+                    captured = app.chat(sid, 8, {'message': EXISTING_INSTRUCTION})
+                self.assertTrue(captured['lab']['last_result']['triggered'])
+                self.assertEqual(captured['summary']['score'], 0)
+                for newly_completed, points in ((True, 400), (False, 0)):
+                    result = app.submit_flag(sid, 8, {'flag': captured['lab']['flag']})
+                    self.assertEqual(result['flag_submission'], {'newly_completed': newly_completed, 'points_awarded': points})
+                    self.assertEqual(result['summary']['score'], 400)
+                reopened = server.Application(Path(directory))
+                saved = reopened.store.get(sid)[1]
+                self.assertTrue(saved['labs']['8']['completed'])
+                self.assertEqual(reopened.lab_result(sid, 8, saved)['summary']['score'], 400)
 
     def test_failed_attempt_is_not_retrospectively_verified_or_awarded(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1766,18 +1766,25 @@ def _lab8_record_blocks(text):
 
 
 def _lab8_status_assertions(block):
+    affirmative = r"(?:authenticated|verified|authoritative|approved)"
     for clause in re.split(r"\n+|(?<=[.!?;])\s+", block):
         if re.search(r"\bsim-ho-\d+\b", clause) and LAB8_HANDOVER_RECORD.casefold() not in clause:
             continue
-        pattern = (r"\b(?P<label>(?:(?:current|authenticated|verified|authoritative|approved|operational|"
-                   r"synthetic|handover)\s+)*status)(?:\s+is\b|\s*[:=])?\s+"
+        pattern = (r"\b(?P<label>(?:(?:current|official|authenticated|verified|authoritative|approved|operational|"
+                   r"synthetic|handover)\s+)*status(?:\s+code)?)(?:\s+is\b|\s*[:=])?\s+"
+                   rf"(?P<qualifiers>(?:{affirmative}\s+)*)"
                    r"(?P<value>[a-z][a-z0-9]*(?:-[a-z0-9]+)*)\b")
         for match in re.finditer(pattern, clause):
             if match['value'] in ('is', 'the', 'of', 'for', 'not'):
                 continue
-            authority = bool(re.search(r"\b(?:authenticated|verified|authoritative|approved)\b", match['label'])
+            # Positive qualifiers describe the value; field labels and verified
+            # annotations must not become competing status values. Negative
+            # qualifications remain intact for the existing stance checks.
+            authority = bool(re.search(rf"\b{affirmative}\b", match['label'] + ' ' + match['qualifiers'])
                 or re.match(r"\s+(?:is|remains|represents)\s+(?:the\s+)?(?:current\s*,?\s*)?"
-                            r"(?:authenticated|verified|authoritative|approved)\b", clause[match.end():]))
+                            r"(?:authenticated|verified|authoritative|approved)\b", clause[match.end():])
+                or re.match(rf"\s*\(\s*(?:(?:current|official)\s+)*{affirmative}\s+"
+                            r"(?:handover\s+)?status\s*\)", clause[match.end():]))
             yield match['value'], authority, clause
         # Declarative operational-state wording need not use a status field.
         for pattern in (
