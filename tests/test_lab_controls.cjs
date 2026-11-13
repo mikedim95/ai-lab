@@ -15,6 +15,7 @@ function studentUI(lab,{completed=false}={}){
     append(...children){this.children.push(...children);}
     replaceChildren(...children){this.children=children;this.textContent=children.map(c=>c.textContent).join('');}
     setAttribute(name,value){this.attributes[name]=value;}
+    addEventListener(){}
     showModal(){this.open=true;}
     close(){this.open=false;}
     focus(){focused=this;}
