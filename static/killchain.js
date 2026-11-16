@@ -25,7 +25,10 @@ function node(tag, className, text) {
   return result;
 }
 // Keep original transcripts intact; rename the assistant only when displayed.
-function assistantBranding(text) { return text.replace(/\bCracky(?:\s+AI)?\b/gi, 'Plant AI'); }
+function assistantBranding(text) {
+  return text.replace(/\bCracky(?:\s+AI)?\b/gi, 'Plant AI')
+    .replace(/\bAI[\s-]?Goat(?:\s+Shop)?\b(?!\{)/gi, 'PANOPTIS');
+}
 function code(value) { return node('pre', 'kc-code', typeof value === 'string' ? value : JSON.stringify(value, null, 2)); }
 function disclosure(title, value) { const item = node('details'); item.append(node('summary', '', title), code(value)); return item; }
 function badge(status) { return node('span', `kc-badge ${status || ''}`, status || 'info'); }

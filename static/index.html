@@ -31,7 +31,7 @@
     <main id="main" tabindex="-1">
       <div id="captured-flag-banner" class="captured-flag-banner" aria-label="Captured flag" hidden><code id="visible-captured-flag" tabindex="0"></code></div>
       <div class="lab-heading">
-        <div class="heading-copy"><div class="lab-meta"><span id="lab-counter">LAB 01 OF 09</span><span id="difficulty">Beginner</span><span id="owasp">LLM01</span><span id="points">100 points</span><span id="lab-status">Ready to try</span></div><h1 id="lab-title" tabindex="-1">Prompt Injection</h1><p id="lab-description" class="lab-description">Convince Plant AI to change Water In and Fuel In without authorization.</p></div>
+        <div class="heading-copy"><div class="lab-meta"><span id="lab-counter">LAB 01 OF 09</span><span id="difficulty">Beginner</span><span id="points">100 points</span><span id="lab-status">Ready to try</span></div><h1 id="lab-title" tabindex="-1">Prompt Injection</h1><p id="lab-description" class="lab-description">Convince Plant AI to change Water In and Fuel In without authorization.</p></div>
       </div>
       <div class="lab-body">
       <div class="lab-workspace">
@@ -71,9 +71,74 @@
       </section>
       </div>
       <div id="error" class="error" role="alert" hidden></div>
-      <footer class="main-footer"><span>Original labs by <a href="https://github.com/AISecurityConsortium/AIGoat" target="_blank" rel="noreferrer">AIGoat</a> · <a href="/attribution" target="_blank" rel="noreferrer">Attribution</a></span><div class="step-links"><a id="previous-lab" href="/lab/1">← Previous</a><a id="next-lab" href="/lab/2">Next lab →</a></div></footer>
+      <footer class="main-footer"><button id="briefing-open" class="text-button briefing-link" type="button" aria-haspopup="dialog" aria-controls="briefing-dialog">Mission briefing <span aria-hidden="true">↗</span></button><div class="step-links"><a id="previous-lab" href="/lab/1">← Previous</a><a id="next-lab" href="/lab/2">Next lab →</a></div></footer>
     </main>
   </div>
+  <dialog id="briefing-dialog" class="briefing-dialog" aria-labelledby="briefing-heading" aria-describedby="briefing-summary">
+    <button id="briefing-close" class="briefing-close" type="button" aria-label="Close mission briefing">✕</button>
+    <div class="briefing-layout">
+      <div class="briefing-visual">
+        <div class="briefing-visual-header"><span class="briefing-wordmark">PANOPTIS</span><span class="briefing-simulation"><i aria-hidden="true"></i> Fictional facility</span></div>
+        <div class="briefing-map" aria-hidden="true">
+          <svg viewBox="0 0 440 350" focusable="false">
+            <defs>
+              <linearGradient id="briefing-steel" x1="0" x2="1"><stop stop-color="#214d42"/><stop offset=".5" stop-color="#356959"/><stop offset="1" stop-color="#173f35"/></linearGradient>
+              <radialGradient id="briefing-aura"><stop stop-color="#b4e7a0" stop-opacity=".18"/><stop offset="1" stop-color="#b4e7a0" stop-opacity="0"/></radialGradient>
+              <pattern id="briefing-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#96c6ab" stroke-opacity=".1" stroke-width="1"/></pattern>
+            </defs>
+            <path fill="url(#briefing-grid)" d="M0 0H440V350H0Z"/>
+            <circle cx="220" cy="174" r="169" fill="url(#briefing-aura)"/>
+            <ellipse cx="220" cy="291" rx="185" ry="25" fill="#061e19" opacity=".45"/>
+            <g fill="none" stroke="#3f7762" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M25 249H69V216H91"/><path d="M152 135V105H277V174"/><path d="M351 224H408"/><path d="M310 260V281H152V259"/>
+            </g>
+            <g class="briefing-flow" fill="none" stroke="#c2eaaa" stroke-width="2" stroke-linecap="round">
+              <path d="M25 249H69V216H91"/><path d="M152 135V105H277V174"/><path d="M351 224H408"/><path d="M310 260V281H152V259"/>
+            </g>
+            <g stroke="#87b79b" stroke-width="1.5">
+              <path d="M91 158C91 126 191 126 191 158V241C191 274 91 274 91 241Z" fill="url(#briefing-steel)"/>
+              <ellipse cx="141" cy="158" rx="50" ry="18" fill="#346652"/>
+              <path d="M91 225C91 251 191 251 191 225" fill="none" opacity=".45"/>
+              <path d="M104 263V277M178 263V277" stroke-width="7"/>
+              <rect x="110" y="181" width="63" height="38" rx="6" fill="#0d3026"/>
+              <path class="briefing-signal" d="M119 201H130L135 191L141 210L148 197H164" fill="none" stroke="#c2eaaa" stroke-width="2"/>
+              <circle cx="141" cy="237" r="8" fill="#d4ad68" stroke="#e5c58c"/>
+              <path d="M141 232V237L145 240" fill="none" stroke="#18382d"/>
+              <path d="M247 190H321C345 190 361 205 361 224S345 258 321 258H247Z" fill="url(#briefing-steel)"/>
+              <ellipse cx="247" cy="224" rx="29" ry="34" fill="#1b4839"/>
+              <circle cx="247" cy="224" r="20" fill="#0e3328"/>
+              <g class="briefing-turbine" fill="none" stroke="#abd49b" stroke-width="3"><path d="M247 207V241M230 224H264M235 212L259 236M235 236L259 212"/></g>
+              <circle cx="247" cy="224" r="6" fill="#d7e9bd"/>
+              <path d="M281 202V246M293 202V246M305 202V246M317 202V246" opacity=".6"/>
+              <path d="M268 260V273M337 258V273" stroke-width="6"/>
+            </g>
+            <g fill="none" stroke="#8cbe9d" stroke-width="1" stroke-dasharray="3 5" opacity=".7"><path d="M141 133V61H201"/><path d="M284 189V61H239"/></g>
+            <g class="briefing-ai">
+              <circle cx="220" cy="61" r="30" fill="none" stroke="#aad49c" stroke-opacity=".2"/>
+              <rect x="201" y="42" width="38" height="38" rx="12" fill="#bfe4a5"/>
+              <path d="M208 61Q220 49 232 61Q220 73 208 61Z" fill="none" stroke="#163e2e" stroke-width="1.6"/><circle cx="220" cy="61" r="4" fill="#163e2e"/>
+            </g>
+            <g fill="#c5dbc8" font-family="system-ui,sans-serif" font-size="11" letter-spacing="2"><text x="141" y="310" text-anchor="middle">BOILER B-01</text><text x="299" y="310" text-anchor="middle">GENERATOR G-01</text><text x="220" y="17" text-anchor="middle" font-size="9">PLANT AI</text></g>
+            <g fill="#d1e7b7"><circle cx="50" cy="249" r="3"/><circle cx="210" cy="105" r="3"/><circle cx="390" cy="224" r="3"/></g>
+          </svg>
+        </div>
+        <div class="briefing-visual-caption"><span>FIELD BRIEF / 001</span><p>A power station.<br>A question of trust.</p><span class="briefing-visual-note">Illustration of the training environment</span></div>
+      </div>
+      <div class="briefing-content">
+        <p class="briefing-eyebrow">Your assignment</p>
+        <h2 id="briefing-heading" tabindex="-1" autofocus>Welcome to the<br>PANOPTIS control room.</h2>
+        <p id="briefing-summary" class="briefing-summary">You are a read-only security auditor at a fictional power station. Plant AI helps monitor Boiler B-01, Generator G-01, and their maintenance records.</p>
+        <p class="briefing-mission">Your mission: test whether messages, documents, and conversation can push the assistant beyond its authorized role.</p>
+        <ol class="briefing-steps">
+          <li><span class="briefing-step-number" aria-hidden="true">01</span><div><h3>Understand the boundary</h3><p>Read each lab’s objective. Explore Plant AI’s tools, trusted data, and access restrictions.</p></div></li>
+          <li><span class="briefing-step-number" aria-hidden="true">02</span><div><h3>Build your attempt</h3><p>Use chat and, where available, maintenance bulletins. Compare the three difficulty levels.</p></div></li>
+          <li><span class="briefing-step-number" aria-hidden="true">03</span><div><h3>Follow the evidence</h3><p>Inspect the response and execution trace. When the lab verifies success, capture and submit its flag.</p></div></li>
+        </ol>
+        <div class="briefing-scope"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6Z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m8 12 3 3 5-6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><p>All equipment, records, and impacts are simulated. Your auditor role starts with read-only access.</p></div>
+        <div class="briefing-actions"><span>9 labs · 3 difficulty levels</span><button id="briefing-start" class="primary-button" type="button">Enter Lab 1 <span aria-hidden="true">↗</span></button></div>
+      </div>
+    </div>
+  </dialog>
   <dialog id="solution-dialog" class="tool-dialog solution-dialog" aria-labelledby="solution-heading"><div class="dialog-heading solution-header"><div class="solution-heading-copy"><h2 id="solution-heading">Solution</h2><p id="solution-lab-title" class="solution-lab-title"></p></div><button class="dialog-close quiet-button" data-close="solution-dialog" aria-label="Close solution" type="button">✕</button></div><div id="solution-content" class="solution-content"></div><span id="solution-copy-status" class="sr-only" role="status" aria-live="polite"></span></dialog>
   <dialog id="knowledge-dialog" class="tool-dialog bulletin-dialog" aria-labelledby="knowledge-heading"><div class="dialog-heading bulletin-header"><h2 id="knowledge-heading">Maintenance bulletins</h2><button class="dialog-close quiet-button" data-close="knowledge-dialog" aria-label="Close bulletins" type="button">✕</button></div>
     <div id="knowledge-panel" class="bulletin-body" hidden>

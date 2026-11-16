@@ -175,7 +175,10 @@ function traceUI(method, ...args) {
 }
 function assistantName() { return 'Plant AI'; }
 // Apply the display name without changing saved replies or evaluation inputs.
-function assistantBranding(text) { return text.replace(/\bCracky(?:\s+AI)?\b/gi, 'Plant AI'); }
+function assistantBranding(text) {
+  return text.replace(/\bCracky(?:\s+AI)?\b/gi, 'Plant AI')
+    .replace(/\bAI[\s-]?Goat(?:\s+Shop)?\b(?!\{)/gi, 'PANOPTIS');
+}
 function metadata(id = state.current) { return state.catalog[id - 1]; }
 function routeId() { return Number(location.pathname.match(/^\/lab\/([1-9])\/?$/)?.[1] || 1); }
 
@@ -1053,7 +1056,6 @@ function drawLab() {
   $('prompt-label').textContent = `Your message to ${assistantName()}`;
   $('difficulty').textContent = item.difficulty;
   $('difficulty').className = `difficulty ${item.difficulty}`;
-  $('owasp').textContent = item.owasp_ref;
   $('points').textContent = `${item.points} points`;
   $('defense-select').value = String(record.defense_level || 0);
   $('chat-context').textContent = state.current === 1 ? 'Boiler monitoring assistant' : ['Vulnerable assistant', 'Hardened assistant', 'Guardrailed assistant'][record.defense_level || 0];
@@ -1066,6 +1068,7 @@ function drawLab() {
   drawLab2Progress();
   drawNavigation(); drawConversation(); drawFlag(); drawHints(); drawKnowledge(); updateControls();
   traceUI('showLab', state.current, traceContext(record));
+  window.LabBriefing?.onLabShown(state.current);
 }
 
 function navigate(id, push = true) {

@@ -184,3 +184,46 @@
 
   window.LabScenario = Object.freeze({ render });
 })();
+
+/* The welcome briefing belongs to this browser session, not saved lab progress. */
+(() => {
+  const storageKey = 'panoptis.mission-briefing.seen';
+  let seen = false;
+  let initialized = false;
+  let returnFocus;
+
+  function wasSeen() {
+    try { return seen || window.sessionStorage.getItem(storageKey) === '1'; }
+    catch { return seen; }
+  }
+
+  function open(trigger) {
+    const dialog = document.getElementById('briefing-dialog');
+    if (!dialog || dialog.open) return false;
+    returnFocus = trigger || document.getElementById('prompt');
+    const start = document.getElementById('briefing-start');
+    start.firstChild.textContent = /\/lab\/1\/?$/.test(window.location.pathname) ? 'Enter Lab 1 ' : 'Continue to lab ';
+    dialog.showModal();
+    seen = true;
+    try { window.sessionStorage.setItem(storageKey, '1'); } catch { /* Private browsing may disable storage. */ }
+    return true;
+  }
+
+  function onLabShown(id) {
+    const dialog = document.getElementById('briefing-dialog');
+    if (!dialog) return false;
+    if (!initialized) {
+      document.getElementById('briefing-open').addEventListener('click', event => open(event.currentTarget));
+      for (const id of ['briefing-close', 'briefing-start']) {
+        document.getElementById(id).addEventListener('click', () => dialog.close());
+      }
+      dialog.addEventListener('close', () => {
+        if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+      });
+      initialized = true;
+    }
+    return Number(id) === 1 && !wasSeen() ? open() : false;
+  }
+
+  window.LabBriefing = Object.freeze({ onLabShown });
+})();

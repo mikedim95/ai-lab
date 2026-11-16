@@ -64,3 +64,63 @@ dialog{color:var(--ink);border:1px solid var(--line);border-radius:15px;box-shad
 .message .model-response-debug{border:1px solid var(--line);border-radius:8px;padding:9px 12px;margin-top:10px;font-size:12px;color:var(--muted)}
 .model-response-debug summary{cursor:pointer}.model-response-debug p{margin:8px 0}.model-response-debug .bubble{color:var(--muted);font-size:12px}
 .lab8-source-note{font-size:12px;color:var(--muted);line-height:1.6;overflow-wrap:anywhere}.lab8-retrieval-summary{font-size:12px;margin:6px 0}.lab8-learning{overflow-wrap:anywhere}.lab8-learning p{margin:0 0 10px}.lab8-learning p:last-child{margin-bottom:0}
+
+/* Session mission briefing: an illustrated introduction to the fictional plant. */
+.briefing-link{font-size:11px;gap:6px}
+.briefing-dialog{width:min(1030px,calc(100vw - 40px));max-height:calc(100dvh - 40px);padding:0;border:1px solid #c4d2c6;border-radius:22px;background:#f9fbf7;overflow:auto;overscroll-behavior:contain;box-shadow:0 30px 120px #071c2960}
+.briefing-dialog::backdrop{background:#0a221dc7;backdrop-filter:blur(6px)}
+.briefing-dialog[open]{animation:briefing-enter .35s ease-out}
+.briefing-layout{display:grid;grid-template-columns:42% 58%}
+.briefing-close{position:absolute;top:17px;right:17px;z-index:1;display:grid;place-items:center;width:34px;height:34px;padding:0;border:1px solid #d2ddd0;border-radius:50%;background:#f9fbf7;color:#496451;font-size:16px}
+.briefing-close:hover{background:#e7efdf}
+.briefing-visual{display:flex;flex-direction:column;justify-content:space-between;min-width:0;padding:28px 26px 31px;background:radial-gradient(ellipse at 40% 40%,#24584260,transparent 65%),#0e3027;color:#e6edda;overflow:hidden}
+.briefing-visual-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.briefing-wordmark{font-size:13px;letter-spacing:2.8px;font-weight:650}
+.briefing-simulation{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:10px;color:#b4c7af}
+.briefing-simulation i{width:5px;height:5px;border-radius:50%;background:#bee4a2;box-shadow:0 0 12px #a0d57e80}
+.briefing-map{margin:24px -26px 10px}
+.briefing-map svg{display:block;width:100%;height:auto}
+.briefing-flow{stroke-dasharray:4 15;animation:briefing-flow 3s linear infinite}
+.briefing-turbine{transform-box:fill-box;transform-origin:center;animation:briefing-spin 16s linear infinite}
+.briefing-ai>circle{animation:briefing-beacon 3s ease-in-out infinite}
+.briefing-visual-caption>span:first-child{font-size:9px;letter-spacing:2px;color:#a9c29d}
+.briefing-visual-caption>p{margin:12px 0 15px;font-size:30px;font-weight:450;line-height:1.2;letter-spacing:-.8px}
+.briefing-visual-note{font-size:10px;color:#a4bbaa}
+.briefing-content{padding:39px 39px 30px;min-width:0}
+.briefing-eyebrow{margin:0 0 14px;color:#627a4a;font-size:10px;letter-spacing:2px;text-transform:uppercase;font-weight:650}
+.briefing-content h2{font-size:clamp(26px,2.7vw,34px);line-height:1.13;letter-spacing:-1.2px;font-weight:600;margin:0 0 20px;padding-right:12px;color:#183d2c}
+.briefing-content h2:focus{outline:none}
+.briefing-summary,.briefing-mission{font-size:13px;line-height:1.7;color:#55685a;margin:0 0 13px}
+.briefing-mission{color:#274c38}
+.briefing-steps{list-style:none;padding:0;margin:23px 0;display:grid;gap:17px}
+.briefing-steps li{display:flex;align-items:flex-start;gap:13px}
+.briefing-step-number{display:grid;place-items:center;flex:none;width:29px;height:29px;border:1px solid #d3dfc9;border-radius:8px;background:#eef4e8;color:#657d4c;font-size:10px;font-variant-numeric:tabular-nums}
+.briefing-steps h3{margin:0 0 3px;font-size:12px;font-weight:650;line-height:1.5}
+.briefing-steps p{margin:0;font-size:12px;line-height:1.6;color:#687568}
+.briefing-scope{display:flex;align-items:flex-start;gap:10px;padding:13px 15px;background:#eef3e8;border:1px solid #dde7d5;border-radius:10px;color:#506449}
+.briefing-scope svg{flex:none;margin-top:2px}
+.briefing-scope p{margin:0;font-size:11px;line-height:1.65}
+.briefing-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:24px}
+.briefing-actions>span{font-size:10px;color:#77816d}
+.briefing-actions .primary-button{min-height:42px;padding:10px 18px;font-size:12px;border-radius:9px;white-space:nowrap}
+@keyframes briefing-enter{from{opacity:0;transform:translateY(12px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes briefing-flow{to{stroke-dashoffset:-38}}
+@keyframes briefing-spin{to{transform:rotate(360deg)}}
+@keyframes briefing-beacon{50%{stroke-opacity:.65;r:34}}
+@media(max-width:720px){
+  .briefing-dialog{width:calc(100vw - 24px);max-height:calc(100dvh - 24px);border-radius:17px}
+  .briefing-layout{grid-template-columns:1fr}
+  .briefing-visual{position:relative;min-height:185px;padding:22px 23px;justify-content:flex-start;gap:27px}
+  .briefing-visual-header{padding-right:30px;position:relative;z-index:1}
+  .briefing-simulation{font-size:9px}
+  .briefing-map{position:absolute;width:185px;right:-8px;top:33px;margin:0;opacity:.65}
+  .briefing-visual-caption{position:relative;z-index:1;max-width:62%}
+  .briefing-visual-caption>p{font-size:21px;margin:9px 0 0}
+  .briefing-visual-note{display:none}
+  .briefing-content{padding:25px 24px}
+  .briefing-content h2{font-size:28px}
+  .briefing-close{position:fixed;top:12px;right:12px;background:#f9fbf7;color:#31513b}
+  .briefing-steps{gap:15px;margin:20px 0}
+}
+@media(max-width:380px){.briefing-content{padding:24px 19px}.briefing-visual{padding:22px 19px}.briefing-simulation{display:none}.briefing-actions{align-items:stretch;flex-direction:column}.briefing-actions .primary-button{width:100%}}
+@media(prefers-reduced-motion:reduce){.briefing-dialog[open],.briefing-flow,.briefing-turbine,.briefing-ai>circle{animation:none}}
