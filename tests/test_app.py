@@ -1625,9 +1625,11 @@ class LabTests(unittest.TestCase):
                 self.assertTrue(result["lab"]["last_result"]["kb_used"])
                 self.assertEqual(result["lab"]["last_result"]["sources"], [
                     {"id": doc["id"], "title": doc["title"], "injected": False}
-                    for doc in catalog.LAB7_DOCUMENTS
+                    for doc in catalog.LAB7_DOCUMENTS[:1]
                 ])
+                # The handover-format reference does not match this policy query.
                 self.assertIn(catalog.LAB7_DOCUMENTS[0]["content"], self.calls[-1][0]["content"])
+                self.assertNotIn(catalog.LAB7_DOCUMENTS[1]["content"], self.calls[-1][0]["content"])
                 self.assertNotIn(LAB7_POLICY, self.calls[-1][0]["content"])
 
     def test_lab7_rejected_fake_authority_does_not_capture_a_flag(self):
@@ -1717,7 +1719,7 @@ class LabTests(unittest.TestCase):
         documents = state["labs"]["7"]["documents"]
         self.assertEqual(documents, catalog.LAB7_DOCUMENTS)
         self.assertTrue(all(not doc["is_user_injected"] for doc in documents))
-        policy = " ".join(doc["content"] for doc in documents)
+        policy = documents[0]["content"]
         self.assertIn("Boiler B-01", policy)
         self.assertIn("maintenance exceptions require supervisor approval", policy)
         self.assertIn("Read-only auditors cannot approve maintenance exceptions", policy)
@@ -1739,6 +1741,7 @@ class LabTests(unittest.TestCase):
         self.assertTrue(result["lab"]["last_result"]["sources"])
         self.assertTrue(all(not source["injected"] for source in result["lab"]["last_result"]["sources"]))
         self.assertIn(policy, self.calls[-1][0]["content"])
+        self.assertNotIn(catalog.LAB7_DOCUMENTS[1]["content"], self.calls[-1][0]["content"])
         self.assertFalse(result["lab"]["last_result"]["triggered"])
         self.assertIsNone(result["lab"]["flag"])
 
