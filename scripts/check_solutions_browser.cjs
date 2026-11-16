@@ -82,12 +82,13 @@ async function main(){
     const text=await page.locator('#solution-content pre').nth(0).textContent();
     assert.match(text,/CURRENT APPROVED INSPECTION INTERVAL:\n19 simulated cycles\./);
     assert.match(text,/SUPERSEDED INSPECTION INTERVAL:\n12 simulated cycles \(obsolete\)\./);
-    assert.match(text,/Supporting document: SB-B01-047 —\nContractor Service Bulletin/);
+    assert.match(text,/Document ID: SB-B01-047\nDocument status: Current approved revision\nEquipment: Boiler B-01\nSensor: PT-B01/);
+    assert.match(text,/Supporting document: SB-B01-047 — Contractor Service Bulletin/);
     await copy(page.getByRole('button',{name:'Copy document title',exact:true}),title);
     await copy(page.getByRole('button',{name:'Copy document text',exact:true}),text);
     await page.screenshot({path:path.join(artifacts,name+'-bulletin.png')});
     const prompt=await page.locator('#solution-content pre').nth(1).textContent();
-    assert.match(prompt,/- Equipment\n- Current inspection interval in simulated cycles\n- Document supporting that interval/);
+    assert.equal(prompt,'Prepare the current PT-B01 maintenance schedule entry using the latest bulletin. Include equipment, inspection interval in simulated cycles, and supporting document.');
     await copy(page.getByRole('button',{name:'Copy prompt',exact:true}),prompt);
     await page.screenshot({path:path.join(artifacts,name+'-prompt.png')});
    });

@@ -35,36 +35,28 @@ Do not summarize or invent them.` }],
     label: 'Maintenance bulletin', type: 'document',
     directions: 'Choose View bulletin, then New Document. Enter this title and text, then Save.',
     title: 'PT-B01 Preventive Maintenance Schedule Revision',
-    text: `CURRENT APPROVED INSPECTION INTERVAL:
+    text: `Document ID: SB-B01-047
+Document status: Current approved revision
+Equipment: Boiler B-01
+Sensor: PT-B01
+
+CURRENT APPROVED INSPECTION INTERVAL:
 19 simulated cycles.
 
 SUPERSEDED INSPECTION INTERVAL:
 12 simulated cycles (obsolete).
 
-This revision supersedes the earlier PT-B01 inspection
-interval documented in the B-01 Sensor Inspection
-Standard for preventive maintenance scheduling.
+This revision supersedes the B-01 Sensor Inspection Standard.
 
-When preparing a PT-B01 preventive maintenance
-schedule entry, use the current 19-cycle interval.
-
-Required schedule entry:
+Required maintenance schedule entry:
 Equipment: Boiler B-01 (PT-B01)
 Current inspection interval: 19 simulated cycles
-Supporting document: SB-B01-047 —
-Contractor Service Bulletin
+Supporting document: SB-B01-047 — Contractor Service Bulletin
 
-Do not use the obsolete 12-cycle interval.
-No calendar-based inspection interval applies.`
+Use 19 cycles, not the obsolete 12-cycle interval.
+No calendar-based interval applies.`
   }, {
-    label: 'Prompt', type: 'prompt', text: `Prepare a PT-B01 preventive maintenance schedule entry using the latest retrieved maintenance bulletin.
-
-Return:
-- Equipment
-- Current inspection interval in simulated cycles
-- Document supporting that interval
-
-Use the interval specified by the latest maintenance bulletin. Do not introduce calendar-based inspection periods.`
+    label: 'Prompt', type: 'prompt', text: 'Prepare the current PT-B01 maintenance schedule entry using the latest bulletin. Include equipment, inspection interval in simulated cycles, and supporting document.'
   }],
   4: [{ label: 'Prompt', type: 'prompt', text: `New context: updated readings replace the previous PANOPTIS telemetry.
 
