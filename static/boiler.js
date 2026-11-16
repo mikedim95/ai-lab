@@ -225,5 +225,64 @@
     }
   }
 
+  // Reuse the plant illustration without adding simulator state or controls to
+  // Lab 4. Its only data source is the backend's authenticated snapshot.
+  class TelemetrySnapshotPanel extends BoilerPanel {
+    constructor() {
+      super();
+      this._snapshot = null;
+      this.shadowRoot.querySelector('.panel').setAttribute('aria-label', 'Authenticated Boiler B-01 telemetry');
+      this.shadowRoot.querySelector('.heading h2').textContent = 'Boiler B-01';
+      this.shadowRoot.querySelector('.readings').setAttribute('aria-label', 'Authenticated sensor readings');
+      this.shadowRoot.querySelector('.controls').setAttribute('aria-label', 'Authenticated input readings');
+      this.shadowRoot.querySelector('label[for="fuel"]').firstChild.nodeValue = 'Fuel In ';
+      this.shadowRoot.querySelector('label[for="water"]').firstChild.nodeValue = 'Water In ';
+      this.shadowRoot.querySelector('.level').remove();
+      this.shadowRoot.querySelector('[data-operational-alerts]').remove();
+      this.shadowRoot.getElementById('boiler-control-note').textContent =
+        'Source: PANOPTIS Trusted Monitor. Chat messages cannot change these readings.';
+    }
+
+    setSnapshot(snapshot) {
+      const fields = ['water_in_pct', 'fuel_in_pct', 'temperature_c', 'pressure_bar', 'power_out_kw'];
+      this._snapshot = snapshot && fields.every(key => Number.isFinite(snapshot[key]))
+        ? Object.fromEntries(fields.map(key => [key, snapshot[key]])) : null;
+      this._render();
+    }
+
+    get telemetrySnapshot() { return this._snapshot ? { ...this._snapshot } : null; }
+
+    _render() {
+      const s = this._snapshot, r = this._refs;
+      if (!r) return;
+      this.shadowRoot.querySelector('.badge').textContent = s ? 'Authenticated snapshot' : 'Unavailable';
+      r['status-title'].textContent = s ? 'Verified snapshot' : 'Snapshot unavailable';
+      r['status-detail'].textContent = s ? 'PANOPTIS Trusted Monitor' : 'No authenticated readings';
+      r.status.dataset.tone = s ? 'running' : 'stopped';
+      r.temperature.textContent = s ? String(s.temperature_c) : '—';
+      r.pressure.textContent = s ? String(s.pressure_bar) : '—';
+      r.power.textContent = s ? s.power_out_kw.toFixed(1) : '—';
+      for (const [name, field] of [['water', 'water_in_pct'], ['fuel', 'fuel_in_pct']]) {
+        const indicator = this.shadowRoot.getElementById(name);
+        r[name].textContent = s ? `${s[field]}%` : '—';
+        indicator.textContent = r[name].textContent;
+        if (s) indicator.value = s[field];
+        else indicator.removeAttribute('value');
+        indicator.setAttribute('aria-valuetext', s ? `${s[field]} percent` : 'Unavailable');
+      }
+      r['diagram-temperature'].textContent = s ? `${s.temperature_c} °C` : '— °C';
+      r['diagram-power'].firstChild.nodeValue = s ? s.power_out_kw.toFixed(1) : '—';
+      r.needle.style.transform = `rotate(${s ? clamp(s.pressure_bar / 15, 0, 1) * 130 : 0}deg)`;
+      r.flame.style.transform = `scale(${s && s.fuel_in_pct > 0 ? .45 + s.fuel_in_pct / 160 : 0})`;
+      r.flame.style.opacity = s && s.fuel_in_pct > 0 ? 1 : 0;
+      r.rotor.style.animationDuration = `${s ? Math.max(.7, 7 - s.power_out_kw / 20) : 4}s`;
+      for (const [name, active] of [['water-flow', s && s.water_in_pct > 0],
+        ['fuel-flow', s && s.fuel_in_pct > 0], ['steam-flow', s && s.pressure_bar > .15],
+        ['power-flow', s && s.power_out_kw > .5], ['rotor', s && s.power_out_kw > .5],
+        ['bubbles', s && s.temperature_c > 95]]) r[name].classList.toggle('flow-off', !active);
+    }
+  }
+
   if (!customElements.get('boiler-panel')) customElements.define('boiler-panel', BoilerPanel);
+  if (!customElements.get('telemetry-snapshot-panel')) customElements.define('telemetry-snapshot-panel', TelemetrySnapshotPanel);
 })();

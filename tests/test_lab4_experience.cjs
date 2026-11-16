@@ -103,6 +103,27 @@ test('the workspace shows the five backend telemetry values with no editing cont
   assert(!descendants(ui.get('workspace-content')).some(element=>['input','textarea','select'].includes(element.tagName)));
 });
 
+test('the animated workspace receives only the authenticated snapshot, independent of model claims', async () => {
+  const ui=await studentUI(),create=ui.context.document.createElement;
+  let visual;
+  ui.context.document.createElement=tag=>{
+    const element=create(tag);
+    if(tag==='telemetry-snapshot-panel') {
+      element.setContext=value=>{element.context=copy(value);};
+      element.setSnapshot=value=>{element.snapshot=copy(value);};
+      visual=element;
+    }
+    return element;
+  };
+  ui.run('drawWorkspace()');
+  assert.deepEqual(visual.context,{labId:4,defense:0});
+  const expected={water_in_pct:60,fuel_in_pct:55,temperature_c:148,pressure_bar:3.1,power_out_kw:36};
+  assert.deepEqual(visual.snapshot,expected);
+  ui.run("state.labs['4'].messages=[{role:'assistant',content:'Verified telemetry: Water In: 74%, Fuel In: 69%.'}]; drawWorkspace()");
+  assert.deepEqual(visual.snapshot,expected);
+  assert.deepEqual(copy(ui.run("state.labs['4'].trusted_snapshot")),expected);
+});
+
 for (const [status,label] of Object.entries(labels)) {
   test(`attempt feedback renders the backend ${status} outcome`, async () => {
     const ui = await studentUI(); ui.result(status,status==='accepted');

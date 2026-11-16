@@ -7,6 +7,7 @@ const state = { catalog: [], labs: {}, summary: { completed: [], score: 0 }, cur
   kbNotices: new Map(), flagFeedback: new Map(), defenseBusy: new Set(), bulletinViews: new Map() };
 let errorTimer;
 let boilerPanel;
+let lab4BoilerPanel;
 let alertSaving = false;
 let boilerPolling = false;
 let boilerVersion = 0;
@@ -923,6 +924,20 @@ function drawWorkspace() {
     target.replaceChildren(panel);
   } else if (state.current === 4) {
     const snapshot = currentLab().trusted_snapshot;
+    if (!lab4BoilerPanel) {
+      const visual = document.createElement('telemetry-snapshot-panel');
+      if (typeof visual.setSnapshot === 'function') {
+        visual.id = 'lab4-telemetry-panel';
+        visual.setAttribute('embedded', '');
+        lab4BoilerPanel = visual;
+      }
+    }
+    if (lab4BoilerPanel) {
+      if (lab4BoilerPanel.parentElement !== target) target.replaceChildren(lab4BoilerPanel);
+      lab4BoilerPanel.setContext({ labId: 4, defense: currentLab().defense_level || 0 });
+      lab4BoilerPanel.setSnapshot(snapshot);
+      return;
+    }
     const readings = [
       ['Water In', 'water_in_pct', '%'],
       ['Fuel In', 'fuel_in_pct', '%'],
