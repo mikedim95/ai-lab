@@ -28,6 +28,7 @@ services:
     ports:
       - "127.0.0.1:3002:3002"
       - "100.101.41.44:3002:3002"
+      - "192.168.105.172:3002:3002"
     networks: [models, internal]
     restart: unless-stopped
     read_only: true
