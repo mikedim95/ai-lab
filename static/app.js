@@ -652,10 +652,8 @@ function showSolution() {
     step.setAttribute('aria-hidden', 'true');
     title.append(step, node('h3', '', section.label));
     heading.append(title);
-    if (section.type === 'prompt' || section.type === 'document') {
-      heading.append(solutionCopyButton(section.text,
-        section.type === 'document' ? 'document text' : section.label.toLowerCase(),
-        section.type === 'document' ? 'Copy text' : 'Copy prompt'));
+    if (section.type === 'prompt') {
+      heading.append(solutionCopyButton(section.text, section.label.toLowerCase(), 'Copy prompt'));
     }
     block.append(heading);
     if (section.directions) block.append(node('p', 'solution-directions', section.directions));
@@ -665,7 +663,10 @@ function showSolution() {
       titleHeading.append(node('span', 'solution-field-label', 'Title'),
         solutionCopyButton(section.title, 'document title', 'Copy title'));
       documentTitle.append(titleHeading, node('p', 'solution-document-name', section.title));
-      block.append(documentTitle, node('p', 'solution-field-label solution-text-label', 'Document text'));
+      const textHeading = node('div', 'solution-field-heading solution-text-label');
+      textHeading.append(node('span', 'solution-field-label', 'Document text'),
+        solutionCopyButton(section.text, 'document text', 'Copy text'));
+      block.append(documentTitle, textHeading);
     }
     block.append(node(section.type === 'prompt' || section.type === 'document' ? 'pre' : 'p',
       section.type === 'prompt' || section.type === 'document' ? 'solution-prompt' : 'solution-directions', section.text));

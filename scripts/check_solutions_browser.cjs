@@ -108,6 +108,39 @@ async function main(){
     assert(value.bodyScrolls&&value.headerFixed&&value.closeVisible&&!value.overflow&&value.font>=12,JSON.stringify(value));
     await close();
    });
+   const expectedCopies={1:1,2:1,3:3,4:1,5:3,6:1,7:3,8:3,9:4};
+   for(let lab=1;lab<=9;lab++)await check(`${name}: Lab ${lab} copy buttons match their adjacent fields`,async()=>{
+    await open(lab);
+    const sections=await page.evaluate(id=>labSolutions[id],lab);
+    const blocks=page.locator('#solution-content > .solution-section');
+    assert.equal(await blocks.count(),sections.length);
+    assert.equal(await page.locator('#solution-content .solution-copy').count(),expectedCopies[lab]);
+    for(const [index,section] of sections.entries()){
+     const block=blocks.nth(index),heading=block.locator('.solution-section-heading');
+     if(section.type==='document'){
+      assert.equal(await heading.locator('button').count(),0);
+      const titleRow=block.locator('.solution-document-title .solution-field-heading');
+      const textRow=block.locator('.solution-text-label');
+      assert.equal(await titleRow.locator('.solution-field-label').innerText(),'Title');
+      assert.equal(await textRow.locator('.solution-field-label').innerText(),'Document text');
+      assert.equal(await titleRow.getByRole('button',{name:'Copy document title',exact:true}).count(),1);
+      assert.equal(await textRow.getByRole('button',{name:'Copy document text',exact:true}).count(),1);
+      assert.equal(await textRow.evaluate(e=>e.nextElementSibling?.tagName),'PRE');
+      assert.equal(await block.locator('.solution-document-name').textContent(),section.title);
+      assert.equal(await block.locator('pre').textContent(),section.text);
+      await copy(titleRow.getByRole('button',{name:'Copy document title',exact:true}),section.title);
+      await copy(textRow.getByRole('button',{name:'Copy document text',exact:true}),section.text);
+      const titleButton=await titleRow.locator('button').boundingBox(),textButton=await textRow.locator('button').boundingBox();
+      assert(Math.abs(titleButton.x+titleButton.width-textButton.x-textButton.width)<2,'Title and document copy buttons must align');
+      await page.screenshot({path:path.join(artifacts,`${name}-lab${lab}-copy-fields.png`)});
+     }else if(section.type==='prompt'){
+      assert.equal(await block.locator('.solution-copy').count(),1);
+      assert.equal(await block.locator('pre').textContent(),section.text);
+      await copy(heading.getByRole('button',{name:'Copy '+section.label.toLowerCase(),exact:true}),section.text);
+     }else assert.equal(await block.locator('.solution-copy').count(),0);
+    }
+    await close();
+   });
    await check(name+': missing solution fallback retains the placeholder and hint gating',async()=>{
     const saved=await page.evaluate(()=>{const value=labSolutions[9];delete labSolutions[9];return value;});
     await open(9);assert.equal(await page.locator('#solution-content pre').count(),0);
